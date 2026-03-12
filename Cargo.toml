@@ -1,0 +1,23 @@
+[package]
+name = "chivebox"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+uu_ls = "0.7"
+uu_cat = "0.7"
+uu_echo = "0.7"
+uu_mkdir = "0.7"
+uu_rm = "0.7"
+uu_cp = "0.7"
+uu_mv = "0.7"
+uu_touch = "0.7"
+uu_pwd = "0.7"
+libc = "0.2"
+
+[profile.release]
+lto = true
+panic = "abort"
+codegen-units = 1
+opt-level = "z"
+strip = true

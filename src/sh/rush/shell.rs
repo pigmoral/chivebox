@@ -1,104 +1,29 @@
-use std::collections::BTreeSet;
 use std::env;
 use std::ffi::{CString, OsString};
-use std::fs::{self, OpenOptions};
+use std::fs::OpenOptions;
 use std::os::fd::{IntoRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use libc::{WEXITSTATUS, WIFEXITED, c_int, dup, dup2, execvp, fork, pipe, waitpid};
-
-use reedline::{
-    ColumnarMenu, Completer, DefaultPrompt, EditCommand, Emacs, KeyCode, KeyModifiers, MenuBuilder,
-    Reedline, ReedlineEvent, ReedlineMenu, Suggestion, default_emacs_keybindings,
+use libc::{
+    SIGINT, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WTERMSIG, c_int, dup, dup2, execvp, fork, pipe,
+    signal, waitpid,
 };
 
 use crate::applets;
 
-const BUILTIN_NAMES: &[&str] = &["cd", "exit", "export", "pwd", "unset"];
-
-pub fn run_shell() -> i32 {
-    let cwd = env::current_dir().unwrap_or_else(|_| Path::new("/").to_path_buf());
-    let mut state = ShellState::new(cwd);
-
-    let mut key_bindings = default_emacs_keybindings();
-    key_bindings.add_binding(
-        KeyModifiers::NONE,
-        KeyCode::Tab,
-        ReedlineEvent::UntilFound(vec![
-            ReedlineEvent::Menu("completion_menu".to_string()),
-            ReedlineEvent::MenuNext,
-            ReedlineEvent::Edit(vec![EditCommand::Complete]),
-        ]),
-    );
-    key_bindings.add_binding(
-        KeyModifiers::SHIFT,
-        KeyCode::BackTab,
-        ReedlineEvent::MenuPrevious,
-    );
-
-    let edit_mode = Emacs::new(key_bindings);
-    let completion_menu = Box::new(
-        ColumnarMenu::default()
-            .with_name("completion_menu")
-            .with_columns(10),
-    );
-
-    let mut rl = Reedline::create()
-        .with_completer(Box::new(ShellCompleter::new()))
-        .with_quick_completions(true)
-        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
-        .with_edit_mode(Box::new(edit_mode));
-
-    loop {
-        let prompt = DefaultPrompt::default();
-        match rl.read_line(&prompt) {
-            Ok(reedline::Signal::Success(line)) => {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-
-                let status = match execute_line(line, &mut state) {
-                    Ok(status) => status,
-                    Err(err) => {
-                        eprintln!("sh: {err}");
-                        state.last_status = 2;
-                        2
-                    }
-                };
-
-                state.last_status = status;
-
-                if let Some(code) = state.exit_code {
-                    return code;
-                }
-            }
-            Ok(reedline::Signal::CtrlC) => {
-                println!("^C");
-                state.last_status = 130;
-            }
-            Ok(reedline::Signal::CtrlD) => {
-                println!("exit");
-                return state.last_status;
-            }
-            Err(err) => {
-                eprintln!("readline error: {err:?}");
-                return 1;
-            }
-        }
-    }
-}
+pub(crate) const BUILTIN_NAMES: &[&str] = &["cd", "exit", "export", "pwd", "unset"];
+pub(crate) const DEFAULT_PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
 
 #[derive(Clone, Debug)]
-struct ShellState {
-    cwd: PathBuf,
-    last_status: i32,
-    exit_code: Option<i32>,
+pub(crate) struct ShellState {
+    pub(crate) cwd: PathBuf,
+    pub(crate) last_status: i32,
+    pub(crate) exit_code: Option<i32>,
 }
 
 impl ShellState {
-    fn new(cwd: PathBuf) -> Self {
+    pub(crate) fn new(cwd: PathBuf) -> Self {
         Self {
             cwd,
             last_status: 0,
@@ -108,7 +33,7 @@ impl ShellState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RunCondition {
+pub(crate) enum RunCondition {
     Always,
     IfSuccess,
     IfFailure,
@@ -191,7 +116,42 @@ enum QuoteMode {
     Double,
 }
 
-fn execute_line(line: &str, state: &mut ShellState) -> Result<i32, String> {
+pub(crate) fn ensure_default_path() {
+    let needs_default = match env::var_os("PATH") {
+        Some(path) => path.is_empty(),
+        None => true,
+    };
+
+    if needs_default {
+        set_env_var("PATH", DEFAULT_PATH);
+    }
+}
+
+pub(crate) fn prompt(state: &ShellState) -> String {
+    let marker = if effective_uid() == 0 { '#' } else { '$' };
+    format!("{}{} ", state.cwd.display(), marker)
+}
+
+pub(crate) fn continuation_prompt() -> String {
+    "> ".to_string()
+}
+
+fn effective_uid() -> libc::uid_t {
+    // SAFETY: geteuid reads process credentials and has no side effects.
+    unsafe { libc::geteuid() }
+}
+
+pub(crate) fn is_incomplete_input(input: &str) -> bool {
+    match tokenize(input) {
+        Ok(tokens) => matches!(
+            tokens.last(),
+            Some(Token::Pipe | Token::AndIf | Token::OrIf | Token::Redir { .. })
+        ),
+        Err(err) => err.starts_with("unterminated "),
+    }
+}
+
+pub(crate) fn execute_line(line: &str, state: &mut ShellState) -> Result<i32, String> {
     let tokens = tokenize(line)?;
     if tokens.is_empty() {
         return Ok(state.last_status);
@@ -422,11 +382,10 @@ fn push_text_part(parts: &mut Vec<WordPart>, value: String, quoted: bool) {
         value: existing,
         quoted: existing_quoted,
     }) = parts.last_mut()
+        && *existing_quoted == quoted
     {
-        if *existing_quoted == quoted {
-            existing.push_str(&value);
-            return;
-        }
+        existing.push_str(&value);
+        return;
     }
 
     parts.push(WordPart::Text { value, quoted });
@@ -462,9 +421,8 @@ fn parse_variable(line: &str, start: usize, quoted: bool) -> (usize, Option<Word
     let after = &rest[1..];
     if let Some(first) = after.chars().next() {
         if first.is_ascii_digit() {
-            let digit_len = first.len_utf8();
             return (
-                1 + digit_len,
+                1 + first.len_utf8(),
                 Some(WordPart::Positional {
                     index: first.to_digit(10).unwrap_or(0) as usize,
                     quoted,
@@ -540,9 +498,7 @@ fn parse_command_line(tokens: &[Token]) -> Result<CommandLine, String> {
                 run_if = RunCondition::IfFailure;
                 pos += 1;
             }
-            Some(token) => {
-                return Err(format!("unexpected token after pipeline: {token:?}"));
-            }
+            Some(token) => return Err(format!("unexpected token after pipeline: {token:?}")),
             None => break,
         }
     }
@@ -551,8 +507,7 @@ fn parse_command_line(tokens: &[Token]) -> Result<CommandLine, String> {
 }
 
 fn parse_pipeline(tokens: &[Token], pos: &mut usize) -> Result<Pipeline, String> {
-    let mut commands = Vec::new();
-    commands.push(parse_simple_command(tokens, pos)?);
+    let mut commands = vec![parse_simple_command(tokens, pos)?];
 
     while matches!(tokens.get(*pos), Some(Token::Pipe)) {
         *pos += 1;
@@ -570,12 +525,12 @@ fn parse_simple_command(tokens: &[Token], pos: &mut usize) -> Result<SimpleComma
     while let Some(token) = tokens.get(*pos) {
         match token {
             Token::Word(word) => {
-                if words.is_empty() {
-                    if let Some(assignment) = parse_assignment_word(word)? {
-                        assignments.push(assignment);
-                        *pos += 1;
-                        continue;
-                    }
+                if words.is_empty()
+                    && let Some(assignment) = parse_assignment_word(word)?
+                {
+                    assignments.push(assignment);
+                    *pos += 1;
+                    continue;
                 }
 
                 words.push(word.clone());
@@ -619,9 +574,7 @@ fn parse_assignment_word(word: &Word) -> Result<Option<Assignment>, String> {
         return Ok(None);
     }
 
-    let value_raw = &word.raw[eq_index + 1..];
-    let value = parse_word_fragment(value_raw)?;
-
+    let value = parse_word_fragment(&word.raw[eq_index + 1..])?;
     Ok(Some(Assignment {
         name: name.to_string(),
         value,
@@ -687,10 +640,12 @@ fn execute_pipeline(pipeline: &Pipeline, state: &mut ShellState) -> Result<i32, 
     let mut last_status = 0;
 
     for (index, command) in pipeline.commands.iter().enumerate() {
-        let is_last = index + 1 == pipeline.commands.len();
-        let pipe_pair = if is_last { None } else { Some(create_pipe()?) };
+        let pipe_pair = if index + 1 == pipeline.commands.len() {
+            None
+        } else {
+            Some(create_pipe()?)
+        };
 
-        // SAFETY: fork creates a child process; we only do async-signal-safe work before exec/_exit.
         let pid = unsafe { fork() };
         if pid < 0 {
             if let Some(read_fd) = prev_read {
@@ -704,6 +659,8 @@ fn execute_pipeline(pipeline: &Pipeline, state: &mut ShellState) -> Result<i32, 
         }
 
         if pid == 0 {
+            reset_signal_handlers_for_child();
+
             if let Some(read_fd) = prev_read {
                 dup_to(read_fd, 0)?;
             }
@@ -720,8 +677,13 @@ fn execute_pipeline(pipeline: &Pipeline, state: &mut ShellState) -> Result<i32, 
             }
 
             let mut child_state = state.clone();
-            let status = execute_child_command(command, &mut child_state).unwrap_or(1);
-            // SAFETY: _exit terminates the child process without running unwinding code.
+            let status = match execute_child_command(command, &mut child_state) {
+                Ok(status) => status,
+                Err(err) => {
+                    eprintln!("sh: {err}");
+                    1
+                }
+            };
             unsafe { libc::_exit(status) };
         }
 
@@ -743,8 +705,7 @@ fn execute_pipeline(pipeline: &Pipeline, state: &mut ShellState) -> Result<i32, 
     }
 
     for pid in pids {
-        let status = wait_for_pid(pid)?;
-        last_status = status;
+        last_status = wait_for_pid(pid)?;
     }
 
     Ok(last_status)
@@ -877,11 +838,9 @@ fn apply_unquoted_expansion(completed: &mut Vec<String>, current: &mut String, v
 
     current.push_str(fields[0]);
     completed.push(std::mem::take(current));
-
     for middle in &fields[1..fields.len() - 1] {
         completed.push((*middle).to_string());
     }
-
     *current = fields[fields.len() - 1].to_string();
 }
 
@@ -997,13 +956,14 @@ fn execute_external_command(
     redirections: &[Redirection],
     state: &ShellState,
 ) -> Result<i32, String> {
-    // SAFETY: fork creates a child process; child exits via exec/_exit.
     let pid = unsafe { fork() };
     if pid < 0 {
         return Err("fork failed".to_string());
     }
 
     if pid == 0 {
+        reset_signal_handlers_for_child();
+
         let mut child_state = state.clone();
         let command = SimpleCommand {
             assignments: assignments
@@ -1032,8 +992,13 @@ fn execute_external_command(
             redirections: redirections.to_vec(),
         };
 
-        let status = execute_child_command(&command, &mut child_state).unwrap_or(1);
-        // SAFETY: _exit terminates the child process without touching shared state.
+        let status = match execute_child_command(&command, &mut child_state) {
+            Ok(status) => status,
+            Err(err) => {
+                eprintln!("sh: {err}");
+                1
+            }
+        };
         unsafe { libc::_exit(status) };
     }
 
@@ -1046,9 +1011,10 @@ fn exec_command(argv: &[String]) -> Result<i32, String> {
     }
 
     if !argv[0].contains('/') && applets::find_applet(&argv[0]).is_some() {
-        let exe = env::current_exe().map_err(|err| format!("failed to locate chivebox: {err}"))?;
-        let exe_bytes = exe.as_os_str().as_bytes();
-        let exe_c = CString::new(exe_bytes).map_err(|_| "invalid executable path".to_string())?;
+        let exe = resolve_chivebox_exec_path()
+            .ok_or_else(|| "failed to locate chivebox executable".to_string())?;
+        let exe_c = CString::new(exe.as_os_str().as_bytes())
+            .map_err(|_| "invalid executable path".to_string())?;
 
         let mut c_args = Vec::with_capacity(argv.len() + 1);
         c_args.push(exe_c.clone());
@@ -1071,11 +1037,24 @@ fn exec_command(argv: &[String]) -> Result<i32, String> {
     Err(format!("{}: command not found", argv[0]))
 }
 
+fn resolve_chivebox_exec_path() -> Option<PathBuf> {
+    if let Ok(path) = env::current_exe() {
+        return Some(path);
+    }
+
+    for fallback in ["/bin/chivebox", "/sbin/chivebox"] {
+        let path = PathBuf::from(fallback);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
 fn exec_cstrings(cmd: &CString, args: &[CString]) {
     let mut ptrs: Vec<*const libc::c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
     ptrs.push(std::ptr::null());
-
-    // SAFETY: argv pointers remain alive for the duration of execvp call.
     unsafe {
         execvp(cmd.as_ptr(), ptrs.as_ptr());
     }
@@ -1083,7 +1062,6 @@ fn exec_cstrings(cmd: &CString, args: &[CString]) {
 
 fn wait_for_pid(pid: libc::pid_t) -> Result<i32, String> {
     let mut status: c_int = 0;
-    // SAFETY: pid is returned from fork; status points to valid memory.
     let wait_result = unsafe { waitpid(pid, &mut status, 0) };
     if wait_result < 0 {
         return Err("waitpid failed".to_string());
@@ -1091,14 +1069,22 @@ fn wait_for_pid(pid: libc::pid_t) -> Result<i32, String> {
 
     if WIFEXITED(status) {
         Ok(WEXITSTATUS(status))
+    } else if WIFSIGNALED(status) {
+        Ok(128 + WTERMSIG(status))
     } else {
         Ok(1)
     }
 }
 
+fn reset_signal_handlers_for_child() {
+    // SAFETY: child process restores default SIGINT handling before exec/running command.
+    unsafe {
+        signal(SIGINT, libc::SIG_DFL);
+    }
+}
+
 fn create_pipe() -> Result<(RawFd, RawFd), String> {
     let mut fds = [0; 2];
-    // SAFETY: pipe expects space for two file descriptors.
     if unsafe { pipe(fds.as_mut_ptr()) } < 0 {
         return Err("pipe failed".to_string());
     }
@@ -1106,7 +1092,6 @@ fn create_pipe() -> Result<(RawFd, RawFd), String> {
 }
 
 fn dup_to(from: RawFd, to: RawFd) -> Result<(), String> {
-    // SAFETY: dup2 duplicates an open file descriptor onto another descriptor number.
     if unsafe { dup2(from, to) } < 0 {
         return Err("dup2 failed".to_string());
     }
@@ -1114,7 +1099,6 @@ fn dup_to(from: RawFd, to: RawFd) -> Result<(), String> {
 }
 
 fn close_fd(fd: RawFd) {
-    // SAFETY: closing an fd is safe; errors are ignored during cleanup paths.
     unsafe {
         libc::close(fd);
     }
@@ -1164,10 +1148,8 @@ fn apply_redirections_parent(
     state: &ShellState,
 ) -> Result<FdGuard, String> {
     let mut saved = Vec::new();
-
     for redirection in redirections {
         let opened = open_redirection(redirection, state)?;
-        // SAFETY: dup duplicates an existing fd so we can restore it later.
         let backup = unsafe { dup(redirection.fd) };
         if backup < 0 {
             close_fd(opened);
@@ -1191,7 +1173,6 @@ fn apply_redirections_child(
         dup_to(opened, redirection.fd)?;
         close_fd(opened);
     }
-
     Ok(())
 }
 
@@ -1200,483 +1181,41 @@ fn open_redirection(redirection: &Redirection, state: &ShellState) -> Result<Raw
     let path = expand_home(&target);
 
     let file = match redirection.kind {
-        RedirectionKind::Input => OpenOptions::new()
-            .read(true)
-            .open(&path)
-            .map_err(|err| format!("{}: {err}", path.display()))?,
+        RedirectionKind::Input => OpenOptions::new().read(true).open(&path),
         RedirectionKind::Output => OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
-            .open(&path)
-            .map_err(|err| format!("{}: {err}", path.display()))?,
-        RedirectionKind::Append => OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|err| format!("{}: {err}", path.display()))?,
-    };
+            .open(&path),
+        RedirectionKind::Append => OpenOptions::new().create(true).append(true).open(&path),
+    }
+    .map_err(|err| format!("{}: {err}", path.display()))?;
 
     Ok(file.into_raw_fd())
 }
 
-fn set_env_var(name: &str, value: &str) {
-    // SAFETY: chivebox shell is single-threaded; mutating process env is acceptable here.
-    unsafe {
-        env::set_var(name, value);
-    }
+pub(crate) fn set_env_var(name: &str, value: &str) {
+    unsafe { env::set_var(name, value) };
 }
 
-fn set_env_var_os(name: &str, value: &OsString) {
-    // SAFETY: chivebox shell is single-threaded; mutating process env is acceptable here.
-    unsafe {
-        env::set_var(name, value);
-    }
+pub(crate) fn set_env_var_os(name: &str, value: &OsString) {
+    unsafe { env::set_var(name, value) };
 }
 
-fn remove_env_var(name: &str) {
-    // SAFETY: chivebox shell is single-threaded; mutating process env is acceptable here.
-    unsafe {
-        env::remove_var(name);
-    }
-}
-
-struct ShellCompleter;
-
-struct TokenSpan {
-    start: usize,
-    end: usize,
-}
-
-struct PathRequest {
-    dir: PathBuf,
-    name_prefix: String,
-    value_prefix: String,
-}
-
-struct CompletionEntry {
-    value: String,
-    is_dir: bool,
-}
-
-impl ShellCompleter {
-    fn new() -> Self {
-        Self
-    }
-
-    fn token_span(line: &str, pos: usize) -> TokenSpan {
-        let pos = pos.min(line.len());
-        let bytes = line.as_bytes();
-
-        let mut start = pos;
-        while start > 0 && !bytes[start - 1].is_ascii_whitespace() {
-            start -= 1;
-        }
-
-        let mut end = pos;
-        while end < bytes.len() && !bytes[end].is_ascii_whitespace() {
-            end += 1;
-        }
-
-        TokenSpan { start, end }
-    }
-
-    fn is_command_position(line: &str, span: &TokenSpan) -> bool {
-        line[..span.start].trim().is_empty()
-    }
-
-    fn current_command(line: &str, span: &TokenSpan) -> Option<String> {
-        line[..span.start]
-            .split_whitespace()
-            .next()
-            .map(str::to_string)
-    }
-
-    fn path_request(token: &str, cwd: &Path) -> PathRequest {
-        if token == "~" {
-            let home = PathBuf::from(env::var("HOME").unwrap_or_else(|_| "/".to_string()));
-            return PathRequest {
-                dir: home.clone(),
-                name_prefix: String::new(),
-                value_prefix: "~/".to_string(),
-            };
-        }
-
-        if let Some(rest) = token.strip_prefix("~/") {
-            let home = PathBuf::from(env::var("HOME").unwrap_or_else(|_| "/".to_string()));
-            return Self::path_request_with_base(rest, &home, "~/");
-        }
-
-        if token.starts_with('/') {
-            return Self::absolute_path_request(token);
-        }
-
-        Self::path_request_with_base(token, cwd, "")
-    }
-
-    fn absolute_path_request(token: &str) -> PathRequest {
-        if token == "/" {
-            return PathRequest {
-                dir: PathBuf::from("/"),
-                name_prefix: String::new(),
-                value_prefix: "/".to_string(),
-            };
-        }
-
-        if token.ends_with('/') {
-            return PathRequest {
-                dir: PathBuf::from(token),
-                name_prefix: String::new(),
-                value_prefix: token.to_string(),
-            };
-        }
-
-        if let Some((dir_part, name_prefix)) = token.rsplit_once('/') {
-            let dir = if dir_part.is_empty() {
-                PathBuf::from("/")
-            } else {
-                PathBuf::from(dir_part)
-            };
-
-            let value_prefix = if dir_part.is_empty() {
-                "/".to_string()
-            } else {
-                format!("{dir_part}/")
-            };
-
-            return PathRequest {
-                dir,
-                name_prefix: name_prefix.to_string(),
-                value_prefix,
-            };
-        }
-
-        PathRequest {
-            dir: PathBuf::from("/"),
-            name_prefix: token.trim_start_matches('/').to_string(),
-            value_prefix: "/".to_string(),
-        }
-    }
-
-    fn path_request_with_base(token: &str, base: &Path, display_prefix: &str) -> PathRequest {
-        if token.is_empty() {
-            return PathRequest {
-                dir: base.to_path_buf(),
-                name_prefix: String::new(),
-                value_prefix: display_prefix.to_string(),
-            };
-        }
-
-        if token == "/" {
-            return PathRequest {
-                dir: PathBuf::from("/"),
-                name_prefix: String::new(),
-                value_prefix: "/".to_string(),
-            };
-        }
-
-        if token.ends_with('/') {
-            return PathRequest {
-                dir: base.join(token.trim_start_matches('/')),
-                name_prefix: String::new(),
-                value_prefix: format!("{display_prefix}{token}"),
-            };
-        }
-
-        if let Some((dir_part, name_prefix)) = token.rsplit_once('/') {
-            let dir = if token.starts_with('/') {
-                PathBuf::from(format!("/{dir_part}"))
-            } else {
-                base.join(dir_part)
-            };
-
-            let prefix = if dir_part.is_empty() {
-                display_prefix.to_string()
-            } else {
-                format!("{display_prefix}{dir_part}/")
-            };
-
-            return PathRequest {
-                dir,
-                name_prefix: name_prefix.to_string(),
-                value_prefix: prefix,
-            };
-        }
-
-        PathRequest {
-            dir: base.to_path_buf(),
-            name_prefix: token.to_string(),
-            value_prefix: display_prefix.to_string(),
-        }
-    }
-
-    fn complete_path(token: &str, cwd: &Path, only_dirs: bool) -> Vec<CompletionEntry> {
-        let request = Self::path_request(token, cwd);
-        let mut matches = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(&request.dir) {
-            for entry in entries.flatten() {
-                let Ok(file_type) = entry.file_type() else {
-                    continue;
-                };
-
-                if only_dirs && !file_type.is_dir() {
-                    continue;
-                }
-
-                let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-                    continue;
-                };
-
-                if !request.name_prefix.is_empty() && !name.starts_with(&request.name_prefix) {
-                    continue;
-                }
-
-                let is_dir = file_type.is_dir();
-                let mut value = format!("{}{}", request.value_prefix, name);
-                if is_dir {
-                    value.push('/');
-                }
-
-                matches.push(CompletionEntry { value, is_dir });
-            }
-        }
-
-        matches.sort_by(|a, b| a.value.cmp(&b.value));
-        matches
-    }
-
-    fn complete_command(token: &str) -> Vec<CompletionEntry> {
-        let mut names = BTreeSet::new();
-        for builtin in BUILTIN_NAMES {
-            names.insert((*builtin).to_string());
-        }
-        for applet in applets::list_applets() {
-            names.insert(applet.name.to_string());
-        }
-
-        if let Some(path_var) = env::var_os("PATH") {
-            for dir in env::split_paths(&path_var) {
-                if let Ok(entries) = fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        let Ok(file_type) = entry.file_type() else {
-                            continue;
-                        };
-                        if !file_type.is_file() {
-                            continue;
-                        }
-                        if let Some(name) = entry.file_name().to_str() {
-                            names.insert(name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-
-        names
-            .into_iter()
-            .filter(|name| name.starts_with(token))
-            .map(|value| CompletionEntry {
-                value,
-                is_dir: false,
-            })
-            .collect()
-    }
-}
-
-impl Completer for ShellCompleter {
-    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
-        let span = Self::token_span(line, pos);
-        let token = &line[span.start..pos.min(span.end)];
-        let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-        let entries = if Self::is_command_position(line, &span)
-            && !token.starts_with('/')
-            && !token.starts_with("./")
-            && !token.starts_with("../")
-            && !token.starts_with("~/")
-        {
-            Self::complete_command(token)
-        } else {
-            let only_dirs = matches!(Self::current_command(line, &span).as_deref(), Some("cd"));
-            Self::complete_path(token, &cwd, only_dirs)
-        };
-
-        entries
-            .into_iter()
-            .map(|entry| Suggestion {
-                value: entry.value,
-                description: None,
-                style: None,
-                extra: None,
-                span: reedline::Span {
-                    start: span.start,
-                    end: span.end,
-                },
-                match_indices: None,
-                display_override: None,
-                append_whitespace: !entry.is_dir && span.end == line.len(),
-            })
-            .collect()
-    }
+pub(crate) fn remove_env_var(name: &str) {
+    unsafe { env::remove_var(name) };
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) fn expand_word_fields_for_test(
+    input: &str,
+    state: &ShellState,
+) -> Result<Vec<String>, String> {
+    let word = parse_word_fragment(input)?;
+    Ok(expand_word_fields(&word, state))
+}
 
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TempDir {
-        path: PathBuf,
-    }
-
-    impl TempDir {
-        fn new() -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("chivebox-rush-test-{unique}"));
-            fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    #[test]
-    fn tokenizes_quotes_and_operators() {
-        let tokens = tokenize("echo \"a b\" && cat < input").unwrap();
-
-        assert!(matches!(tokens[0], Token::Word(_)));
-        assert!(matches!(tokens[1], Token::Word(_)));
-        assert!(matches!(tokens[2], Token::AndIf));
-        assert!(matches!(tokens[3], Token::Word(_)));
-        assert!(matches!(
-            tokens[4],
-            Token::Redir {
-                kind: RedirectionKind::Input,
-                ..
-            }
-        ));
-        assert!(matches!(tokens[5], Token::Word(_)));
-    }
-
-    #[test]
-    fn parses_list_pipeline_and_redirection() {
-        let tokens = tokenize("FOO=bar echo hi | cat >> out && pwd").unwrap();
-        let parsed = parse_command_line(&tokens).unwrap();
-
-        assert_eq!(parsed.items.len(), 2);
-        assert_eq!(parsed.items[0].pipeline.commands.len(), 2);
-        assert_eq!(parsed.items[1].run_if, RunCondition::IfSuccess);
-        assert_eq!(parsed.items[0].pipeline.commands[0].assignments.len(), 1);
-        assert_eq!(parsed.items[0].pipeline.commands[1].redirections.len(), 1);
-    }
-
-    #[test]
-    fn expands_unquoted_variable_with_field_splitting() {
-        set_env_var("CHIVE_SPLIT", "1 2");
-        let state = ShellState::new(PathBuf::from("."));
-        let word = parse_word_fragment("a${CHIVE_SPLIT}b").unwrap();
-
-        assert_eq!(expand_word_fields(&word, &state), ["a1", "2b"]);
-
-        remove_env_var("CHIVE_SPLIT");
-    }
-
-    #[test]
-    fn expands_quoted_variable_without_field_splitting() {
-        set_env_var("CHIVE_QUOTED", "1 2");
-        let state = ShellState::new(PathBuf::from("."));
-        let word = parse_word_fragment("\"$CHIVE_QUOTED\"").unwrap();
-
-        assert_eq!(expand_word_fields(&word, &state), ["1 2"]);
-
-        remove_env_var("CHIVE_QUOTED");
-    }
-
-    #[test]
-    fn executes_and_or_lists() {
-        let mut state = ShellState::new(env::current_dir().unwrap());
-
-        let status = execute_line("false && pwd || true", &mut state).unwrap();
-
-        assert_eq!(status, 0);
-    }
-
-    #[test]
-    fn builtin_export_and_unset_work() {
-        let mut state = ShellState::new(env::current_dir().unwrap());
-        execute_line("export CHIVE_TEST=value", &mut state).unwrap();
-        assert_eq!(env::var("CHIVE_TEST").unwrap(), "value");
-
-        execute_line("unset CHIVE_TEST", &mut state).unwrap();
-        assert!(env::var("CHIVE_TEST").is_err());
-    }
-
-    #[test]
-    fn redirection_creates_output_file() {
-        let temp = TempDir::new();
-        let old_cwd = env::current_dir().unwrap();
-        env::set_current_dir(temp.path()).unwrap();
-
-        let mut state = ShellState::new(temp.path().to_path_buf());
-        let status = execute_line("/bin/echo hello > out.txt", &mut state).unwrap();
-
-        env::set_current_dir(old_cwd).unwrap();
-
-        assert_eq!(status, 0);
-        assert_eq!(
-            fs::read_to_string(temp.path().join("out.txt")).unwrap(),
-            "hello\n"
-        );
-    }
-
-    #[test]
-    fn completes_nested_absolute_paths_without_dropping_parent_dir() {
-        let matches = ShellCompleter::complete_path("/proc/cp", Path::new("/"), false);
-
-        assert!(matches.iter().any(|entry| entry.value == "/proc/cpuinfo"));
-    }
-
-    #[test]
-    fn completes_relative_paths_with_directory_prefix() {
-        let temp = TempDir::new();
-        fs::create_dir_all(temp.path().join("src")).unwrap();
-        fs::write(temp.path().join("src/main.rs"), b"").unwrap();
-
-        let matches = ShellCompleter::complete_path("src/ma", temp.path(), false);
-
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].value, "src/main.rs");
-    }
-
-    #[test]
-    fn completes_directory_entries_with_trailing_slash() {
-        let temp = TempDir::new();
-        fs::create_dir_all(temp.path().join("nested/child")).unwrap();
-
-        let matches = ShellCompleter::complete_path("nested/", temp.path(), false);
-
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].value, "nested/child/");
-    }
-
-    #[test]
-    fn token_span_replaces_entire_path_token() {
-        let span = ShellCompleter::token_span("ls /proc/cp", 11);
-
-        assert_eq!(span.start, 3);
-        assert_eq!(span.end, 11);
-    }
+#[cfg(test)]
+pub(crate) fn tokenize_for_test(line: &str) -> Result<usize, String> {
+    Ok(tokenize(line)?.len())
 }

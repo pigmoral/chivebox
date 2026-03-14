@@ -1,0 +1,121 @@
+# Chivebox Development Notes
+
+## Project Focus
+
+- `chivebox` is a Rust multi-call binary in the BusyBox style.
+- Base applets such as `ls`, `cp`, `cat`, `mv`, `rm`, `mkdir`, `touch`, `pwd`, and `echo` are primarily provided through uutils crates.
+- Custom work is currently concentrated in the shell and early-init workflow for serial-first RISC-V initramfs environments.
+
+## Current Shell Direction
+
+- The shell implementation lives under `src/sh/rush/`.
+- `reedline` has been removed on purpose. The shell now uses a serial-first basic line editor that is more reliable on QEMU `ttyS0` and real board serial consoles.
+- After every non-trivial code change, run at least `cargo check`. Add or update focused tests whenever behavior changes or a bug is fixed.
+- When debugging shell behavior, prefer adding targeted, removable instrumentation that follows `busybox hush`'s tty/job-control model rather than speculative fallback logic.
+- The shell is split into:
+  - `src/sh/rush/mod.rs`: REPL orchestration
+  - `src/sh/rush/input.rs`: basic line editor for serial/TTY input
+  - `src/sh/rush/completion.rs`: completion logic independent of any readline library
+  - `src/sh/rush/shell.rs`: tokenizer, parser, expansion, execution, builtins, redirections, and pipelines
+
+## Implemented Shell Capabilities
+
+- Basic interactive prompt using current working directory and standard shell markers:
+  - root prompt ends with `#`
+  - non-root prompt ends with `$`
+- Continuation prompt `> ` for incomplete input.
+- Line editing features in basic mode:
+  - Enter
+  - Backspace
+  - Ctrl-C for interactive line cancel
+  - Ctrl-D on empty line to exit
+  - Ctrl-L to clear screen
+  - Tab completion
+- Completion behavior:
+  - command completion for builtins, bundled applets, and `PATH`
+  - path completion with preserved full insertion path
+  - `cd` only completes directories
+  - display names are basename-style (`cat`, `chivebox`, `child/`) instead of full paths
+  - multiple candidates are printed in a compact column layout instead of one-per-line
+- Parser/executor features:
+  - quoting and escaping
+  - `;`, `&&`, `||`, `|`
+  - `<`, `>`, `>>`
+  - environment assignments before commands
+  - `$VAR`, `${VAR}`, `$?`
+  - builtins: `cd`, `exit`, `export`, `pwd`, `unset`
+
+## Signal Handling Notes
+
+- Child processes restore default `SIGINT` handling before running commands.
+- Interactive execution is moving toward hush-style tty ownership: the shell needs to hand the controlling tty to the foreground process group and reclaim it afterwards.
+- In `rdinit=/bin/sh` and PID 1 scenarios, verify whether the shell has a controlling tty before assuming job control is available. Reference `busybox ash` and `cttyhack` behavior for acquiring ctty.
+- Signal exits are mapped to shell-style statuses such as `130` for `SIGINT`.
+- Always re-verify Ctrl-C behavior on both host PTY and QEMU serial after touching input, termios, or process execution code.
+
+## Initramfs / Build Notes
+
+### Host Build
+- Host release build: `cargo build --release`
+- RISC-V musl release (use zig linker): `cargo zigbuild --release --target riscv64gc-unknown-linux-musl`
+- Plain `cargo build --release --target riscv64gc-unknown-linux-musl` may fail on hosts without a working RISC-V musl linker.
+
+### Creating Initramfs
+
+**Important**: Do NOT create device nodes in initramfs using `mknod`. The Linux kernel's devtmpfs will automatically create proper device nodes (`/dev/console`, `/dev/tty`, `/dev/ttyS0`, `/dev/null`, etc.) at boot time. Creating fake device nodes (even with fakeroot) will result in regular files instead of real device nodes, causing I/O failures.
+
+Steps to create a working initramfs:
+```bash
+# Create directory structure
+mkdir -p initramfs/{bin,sbin,etc,proc,sys,root}
+
+# Copy chivebox binary
+cp target/riscv64gc-unknown-linux-musl/release/chivebox initramfs/bin/
+
+# Create symlinks for applets (required for initramfs)
+cd initramfs/bin
+for cmd in sh cat cp echo ls mkdir mount mv pwd rm touch init; do
+    ln -sf chivebox $cmd
+done
+
+# Create /init symlink (required - kernel looks for this)
+cd initramfs
+ln -s bin/chivebox init
+
+# Package initramfs (do NOT create device nodes manually)
+cd initramfs
+find . -print | cpio -o --format=newc > ../initramfs.cpio
+gzip -c ../initramfs.cpio > ../initramfs.cpio.gz
+```
+
+### Running QEMU with Initramfs
+
+```bash
+qemu-system-riscv64 \
+  -M virt \
+  -m 256M \
+  -kernel Image \
+  -initrd initramfs.cpio.gz \
+  -append "console=ttyS0" \
+  -nographic
+```
+
+Note: The kernel's devtmpfs will automatically create `/dev/console`, `/dev/tty`, `/dev/ttyS0`, `/dev/null`, etc. from the kernel command line (`console=ttyS0`).
+
+## Known Gaps / Next Work
+
+- Foreground job control and tty handoff are critical areas and should be kept aligned with `busybox hush` behavior.
+- `Ctrl-C` handling for all serial/QEMU combinations should be re-verified after each input-layer change.
+- Missing shell features compared with `busybox hush` still include things like:
+  - `2>` / `2>>` / `2>&1`
+  - `.` / `source`
+  - `read`
+  - heredocs
+  - command substitution
+  - control flow (`if`, `while`, `for`, `case`)
+
+## Reference Priority
+
+- First reference: `../busybox/shell/hush.c` and `../busybox/shell/hush_doc.txt`
+- Second reference: `../brush` basic/minimal interactive input code
+- The design target is not full bash compatibility. The priority is a small, usable, serial-friendly shell suitable for initramfs and embedded systems.

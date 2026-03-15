@@ -21,6 +21,11 @@ pub const APPLETS: &[Applet] = &[
         main: uu_cp::uumain,
     },
     Applet {
+        name: "df",
+        help: "Show disk usage",
+        main: uu_df::uumain,
+    },
+    Applet {
         name: "echo",
         help: "Display text",
         main: uu_echo::uumain,

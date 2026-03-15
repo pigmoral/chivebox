@@ -55,6 +55,40 @@
 
 ## Initramfs / Build Notes
 
+### Init Program (src/init.rs)
+
+The init program is the first process run by the kernel (PID 1). It handles:
+- Signal initialization (ignores most signals, except SIGCHLD which must work for wait())
+- Console initialization (opens /dev/console and duplicates to stdin/stdout/stderr)
+- Filesystem mounting:
+  - `/proc` (procfs)
+  - `/dev` (devtmpfs)
+  - `/tmp` (tmpfs)
+- Environment setup (PATH, SHELL, USER, TERM)
+- Shell spawning loop with auto-restart
+
+**Important**: Do NOT set `signal(SIGCHLD, SIG_IGN)` - this causes the kernel to auto-reap children, making `wait()` fail with "waitpid failed". Use the default signal handling or a custom handler.
+
+### Adding New uutils Commands
+
+When adding a new command from uutils (e.g., `uu_df`), follow these steps:
+
+1. **Add dependency** in `Cargo.toml`:
+```toml
+uu_<command> = "0.7"
+```
+
+2. **Register applet** in `src/applets.rs`:
+```rust
+Applet {
+    name: "<command>",
+    help: "Help text",
+    main: uu_<command>::uumain,
+},
+```
+
+Note: Do NOT create a separate entry file like `src/<command>.rs` - just reference `uu_<command>::uumain` directly in `applets.rs`.
+
 ### Host Build
 - Host release build: `cargo build --release`
 - RISC-V musl release (use zig linker): `cargo zigbuild --release --target riscv64gc-unknown-linux-musl`
@@ -113,6 +147,12 @@ Note: The kernel's devtmpfs will automatically create `/dev/console`, `/dev/tty`
   - heredocs
   - command substitution
   - control flow (`if`, `while`, `for`, `case`)
+
+## General Guidelines
+
+- Use English for all code comments
+- Reference busybox source code for implementation patterns
+- Document development decisions in this file
 
 ## Reference Priority
 

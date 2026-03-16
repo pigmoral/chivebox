@@ -3,8 +3,11 @@
 ## Project Focus
 
 - `chivebox` is a Rust multi-call binary in the BusyBox style.
-- Base applets such as `ls`, `cp`, `cat`, `mv`, `rm`, `mkdir`, `touch`, `pwd`, and `echo` are primarily provided through uutils crates.
-- Custom work is currently concentrated in the shell and early-init workflow for serial-first RISC-V initramfs environments.
+- Base applets such as `ls`, `cp`, `cat`, `mv`, `rm`, `mkdir`, `touch`, `pwd`, `echo`, `df`, and `sync` are primarily provided through uutils crates.
+- Custom work is currently concentrated in:
+  - Shell (`src/sh/rush/`) for serial-first RISC-V initramfs environments
+  - Filesystem utilities (`src/volume_id/`, `src/blkid.rs`, `src/mount.rs`, `src/umount.rs`)
+  - Early-init workflow (`src/init.rs`)
 
 ## Current Shell Direction
 
@@ -31,6 +34,9 @@
   - Ctrl-D on empty line to exit
   - Ctrl-L to clear screen
   - Tab completion
+  - Up/Down arrow keys for command history navigation (in-memory, max 100 entries)
+  - Left/Right arrow keys for cursor movement within the line
+  - Insert and delete characters at any cursor position
 - Completion behavior:
   - command completion for builtins, bundled applets, and `PATH`
   - path completion with preserved full insertion path
@@ -44,6 +50,45 @@
   - environment assignments before commands
   - `$VAR`, `${VAR}`, `$?`
   - builtins: `cd`, `exit`, `export`, `pwd`, `unset`
+
+## Filesystem Utilities
+
+### volume_id Module (`src/volume_id/mod.rs`)
+
+A filesystem detection module that probes block device superblocks to identify filesystem types, UUIDs, and labels. Supports:
+- ext2/ext3/ext4 (distinguishes versions by feature flags)
+- xfs
+- btrfs
+- f2fs
+- squashfs
+- vfat
+- ntfs
+
+The module reads magic numbers and metadata from well-known superblock offsets, similar to busybox's `util-linux/volume_id/` implementation.
+
+### blkid (`src/blkid.rs`)
+
+Block device identification utility using the volume_id module. Outputs `DEVNAME: UUID="..." TYPE="..." LABEL="..."` format. When called without arguments, scans `/dev` for block devices.
+
+### mount (`src/mount.rs`)
+
+Mount command with automatic filesystem type detection. When `-t` is not specified, uses volume_id to probe the device's filesystem type instead of blindly iterating through `/proc/filesystems`. This avoids unnecessary kernel warning messages from failed mount attempts.
+
+### umount (`src/umount.rs`)
+
+Unmount utility supporting:
+- `-f` force unmount (lazy)
+- `-l` lazy unmount
+- `-r` remount read-only on failure
+- `-v` verbose
+- `-a` unmount all
+- `-t <type>` filter by filesystem type
+
+Handles trailing slashes in mount point paths correctly.
+
+### sync
+
+Synchronizes filesystem caches via `uu_sync`.
 
 ## Signal Handling Notes
 
@@ -63,6 +108,7 @@ The init program is the first process run by the kernel (PID 1). It handles:
 - Filesystem mounting:
   - `/proc` (procfs)
   - `/dev` (devtmpfs)
+  - `/sys` (sysfs)
   - `/tmp` (tmpfs)
 - Environment setup (PATH, SHELL, USER, TERM)
 - Shell spawning loop with auto-restart
@@ -108,7 +154,7 @@ cp target/riscv64gc-unknown-linux-musl/release/chivebox initramfs/bin/
 
 # Create symlinks for applets (required for initramfs)
 cd initramfs/bin
-for cmd in sh cat cp echo ls mkdir mount mv pwd rm touch init; do
+for cmd in sh cat cp echo ls mkdir mount mv pwd rm touch blkid umount sync init; do
     ln -sf chivebox $cmd
 done
 

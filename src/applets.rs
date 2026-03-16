@@ -186,6 +186,11 @@ pub const APPLETS: &[Applet] = &[
         main: uu_head::uumain,
     },
     Applet {
+        name: "hexdump",
+        help: "Display file contents in hex",
+        main: uu_hexdump::uumain,
+    },
+    Applet {
         name: "hostid",
         help: "Print host identifier",
         main: uu_hostid::uumain,
@@ -239,6 +244,11 @@ pub const APPLETS: &[Applet] = &[
         name: "ls",
         help: "List directory contents",
         main: uu_ls::uumain,
+    },
+    Applet {
+        name: "lscpu",
+        help: "Display CPU information",
+        main: uu_lscpu::uumain,
     },
     Applet {
         name: "md5sum",

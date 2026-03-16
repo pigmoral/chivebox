@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 libc = "0.2"
-uucore = { version = "0.2", features = ["libc", "utmpx", "process", "entries", "signals"] }
+uucore = { version = "0.2", features = ["libc", "utmpx", "process", "entries", "signals", "parser"] }
 uu_arch = "0.7"
 uu_b2sum = "0.7"
 uu_base32 = "0.7"
@@ -40,6 +40,7 @@ uu_fmt = "0.7"
 uu_fold = "0.7"
 uu_groups = "0.7"
 uu_head = "0.7"
+uu_hexdump = { git = "https://github.com/uutils/util-linux", branch = "main" }
 uu_hostid = "0.7"
 uu_hostname = "0.7"
 uu_id = "0.7"
@@ -50,6 +51,7 @@ uu_link = "0.7"
 uu_ln = "0.7"
 uu_logname = "0.7"
 uu_ls = "0.7"
+uu_lscpu = { git = "https://github.com/uutils/util-linux", branch = "main" }
 uu_md5sum = "0.7"
 uu_mkdir = "0.7"
 uu_mkfifo = "0.7"

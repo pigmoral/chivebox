@@ -8,17 +8,49 @@ use libc::{
 
 use super::completion::{apply_completion, display_name, CompletionEntry};
 
+const MAX_HISTORY: usize = 100;
+
 pub(crate) enum ReadOutcome {
     Line(String),
     Eof,
     Interrupted,
 }
 
-pub(crate) struct BasicLineEditor;
+enum KeyCode {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+pub(crate) struct BasicLineEditor {
+    history: Vec<String>,
+    history_index: usize,
+    saved_line: String,
+}
 
 impl BasicLineEditor {
     pub(crate) fn new() -> Self {
-        Self
+        Self {
+            history: Vec::new(),
+            history_index: 0,
+            saved_line: String::new(),
+        }
+    }
+
+    pub(crate) fn add_to_history(&mut self, line: &str) {
+        if line.trim().is_empty() {
+            return;
+        }
+        if let Some(last) = self.history.last() {
+            if last == line {
+                return;
+            }
+        }
+        if self.history.len() >= MAX_HISTORY {
+            self.history.remove(0);
+        }
+        self.history.push(line.to_string());
     }
 
     pub(crate) fn read_line<F>(&mut self, prompt: &str, mut completer: F) -> io::Result<ReadOutcome>
@@ -60,7 +92,11 @@ impl BasicLineEditor {
     {
         let _guard = RawModeGuard::new(0)?;
         let mut line = String::new();
+        let mut cursor: usize = 0;
         let mut stdout = io::stdout();
+
+        self.history_index = self.history.len();
+        self.saved_line.clear();
 
         print_prompt(&mut stdout, prompt)?;
 
@@ -83,31 +119,108 @@ impl BasicLineEditor {
                     }
                 }
                 8 | 127 => {
-                    if line.pop().is_some() {
-                        stdout.write_all(b"\x08 \x08")?;
-                        stdout.flush()?;
+                    if cursor > 0 {
+                        cursor -= 1;
+                        line.remove(cursor);
+                        redraw_line(&mut stdout, prompt, &line, cursor)?;
                     }
                 }
                 b'\t' => {
-                    let completions = completer(&line, line.len());
-                    handle_completions(&mut stdout, prompt, &mut line, completions)?;
+                    let completions = completer(&line, cursor);
+                    handle_completions(&mut stdout, prompt, &mut line, &mut cursor, completions)?;
                 }
                 12 => {
                     clear_screen(&mut stdout)?;
                     print_prompt(&mut stdout, prompt)?;
                     stdout.write_all(line.as_bytes())?;
+                    if cursor < line.len() {
+                        move_cursor_left(&mut stdout, line.len() - cursor)?;
+                    }
                     stdout.flush()?;
                 }
-                0x1b => consume_escape_sequence(0)?,
+                0x1b => {
+                    if let Some(key) = parse_escape_sequence(0)? {
+                        match key {
+                            KeyCode::Up => {
+                                self.handle_history_up(
+                                    &mut line,
+                                    &mut cursor,
+                                    &mut stdout,
+                                    prompt,
+                                )?;
+                            }
+                            KeyCode::Down => {
+                                self.handle_history_down(
+                                    &mut line,
+                                    &mut cursor,
+                                    &mut stdout,
+                                    prompt,
+                                )?;
+                            }
+                            KeyCode::Left => {
+                                if cursor > 0 {
+                                    cursor -= 1;
+                                    move_cursor_left(&mut stdout, 1)?;
+                                    stdout.flush()?;
+                                }
+                            }
+                            KeyCode::Right => {
+                                if cursor < line.len() {
+                                    cursor += 1;
+                                    move_cursor_right(&mut stdout, 1)?;
+                                    stdout.flush()?;
+                                }
+                            }
+                        }
+                    }
+                }
                 byte if (0x20..=0x7e).contains(&byte) => {
-                    let ch = byte as char;
-                    line.push(ch);
-                    stdout.write_all(&[byte])?;
-                    stdout.flush()?;
+                    line.insert(cursor, byte as char);
+                    cursor += 1;
+                    redraw_line(&mut stdout, prompt, &line, cursor)?;
                 }
                 _ => {}
             }
         }
+    }
+
+    fn handle_history_up(
+        &mut self,
+        line: &mut String,
+        cursor: &mut usize,
+        stdout: &mut io::Stdout,
+        prompt: &str,
+    ) -> io::Result<()> {
+        if self.history_index == self.history.len() {
+            self.saved_line = line.clone();
+        }
+        if self.history_index > 0 {
+            self.history_index -= 1;
+            *line = self.history[self.history_index].clone();
+            *cursor = line.len();
+            redraw_line(stdout, prompt, line, *cursor)?;
+        }
+        Ok(())
+    }
+
+    fn handle_history_down(
+        &mut self,
+        line: &mut String,
+        cursor: &mut usize,
+        stdout: &mut io::Stdout,
+        prompt: &str,
+    ) -> io::Result<()> {
+        if self.history_index < self.history.len() {
+            self.history_index += 1;
+            *line = if self.history_index == self.history.len() {
+                self.saved_line.clone()
+            } else {
+                self.history[self.history_index].clone()
+            };
+            *cursor = line.len();
+            redraw_line(stdout, prompt, line, *cursor)?;
+        }
+        Ok(())
     }
 }
 
@@ -115,43 +228,51 @@ fn handle_completions(
     stdout: &mut io::Stdout,
     prompt: &str,
     line: &mut String,
+    cursor: &mut usize,
     completions: Vec<CompletionEntry>,
 ) -> io::Result<()> {
     match completions.as_slice() {
         [] => Ok(()),
         [entry] => {
-            let old_display_len = line.len();
-            *line = apply_completion(line, line.len(), entry);
-            redraw_line(stdout, prompt, line, old_display_len)
+            *line = apply_completion(line, *cursor, entry);
+            *cursor = line.len();
+            redraw_line(stdout, prompt, line, *cursor)
         }
         entries => {
             write_newline(stdout)?;
             print_completion_grid(stdout, entries)?;
-            print_prompt(stdout, prompt)?;
-            stdout.write_all(line.as_bytes())?;
-            stdout.flush()
+            redraw_line(stdout, prompt, line, *cursor)
         }
     }
 }
 
-fn redraw_line(
-    stdout: &mut io::Stdout,
-    prompt: &str,
-    line: &str,
-    old_line_len: usize,
-) -> io::Result<()> {
+fn redraw_line(stdout: &mut io::Stdout, prompt: &str, line: &str, cursor: usize) -> io::Result<()> {
     stdout.write_all(b"\r")?;
     stdout.write_all(prompt.as_bytes())?;
     stdout.write_all(line.as_bytes())?;
-    if old_line_len > line.len() {
-        for _ in 0..(old_line_len - line.len()) {
-            stdout.write_all(b" ")?;
-        }
-        stdout.write_all(b"\r")?;
-        stdout.write_all(prompt.as_bytes())?;
-        stdout.write_all(line.as_bytes())?;
+    stdout.write_all(b"\x1b[J")?;
+
+    let back_cursor = line.len().saturating_sub(cursor);
+    if back_cursor > 0 {
+        move_cursor_left(stdout, back_cursor)?;
     }
     stdout.flush()
+}
+
+fn move_cursor_left(stdout: &mut io::Stdout, n: usize) -> io::Result<()> {
+    if n == 0 {
+        return Ok(());
+    }
+    write!(stdout, "\x1b[{}D", n)?;
+    Ok(())
+}
+
+fn move_cursor_right(stdout: &mut io::Stdout, n: usize) -> io::Result<()> {
+    if n == 0 {
+        return Ok(());
+    }
+    write!(stdout, "\x1b[{}C", n)?;
+    Ok(())
 }
 
 fn print_prompt(stdout: &mut io::Stdout, prompt: &str) -> io::Result<()> {
@@ -193,7 +314,6 @@ fn print_completion_grid(stdout: &mut io::Stdout, entries: &[CompletionEntry]) -
 
 fn terminal_width() -> usize {
     let mut ws = unsafe { std::mem::zeroed::<winsize>() };
-    // SAFETY: ioctl fills the provided winsize for a tty-like fd.
     let result = unsafe { ioctl(1, TIOCGWINSZ, &mut ws) };
     if result == 0 && ws.ws_col > 0 {
         usize::from(ws.ws_col)
@@ -208,13 +328,11 @@ fn write_newline(stdout: &mut io::Stdout) -> io::Result<()> {
 }
 
 fn stdin_is_tty() -> bool {
-    // SAFETY: isatty reads fd metadata only.
     unsafe { isatty(0) == 1 }
 }
 
 fn read_byte(fd: RawFd) -> io::Result<u8> {
     let mut byte = [0u8; 1];
-    // SAFETY: read writes exactly one byte into the provided valid buffer.
     let n = unsafe { read(fd, byte.as_mut_ptr() as *mut c_void, 1) };
     if n < 0 {
         return Err(io::Error::last_os_error());
@@ -225,14 +343,20 @@ fn read_byte(fd: RawFd) -> io::Result<u8> {
     Ok(byte[0])
 }
 
-fn consume_escape_sequence(fd: RawFd) -> io::Result<()> {
+fn parse_escape_sequence(fd: RawFd) -> io::Result<Option<KeyCode>> {
     let first = read_byte(fd)?;
     if first != b'[' {
-        return Ok(());
+        return Ok(None);
     }
 
-    let _ = read_byte(fd)?;
-    Ok(())
+    let second = read_byte(fd)?;
+    match second {
+        b'A' => Ok(Some(KeyCode::Up)),
+        b'B' => Ok(Some(KeyCode::Down)),
+        b'C' => Ok(Some(KeyCode::Right)),
+        b'D' => Ok(Some(KeyCode::Left)),
+        _ => Ok(None),
+    }
 }
 
 struct RawModeGuard {
@@ -244,7 +368,6 @@ impl RawModeGuard {
     fn new(fd: RawFd) -> io::Result<Self> {
         let mut saved = unsafe { std::mem::zeroed::<termios>() };
 
-        // SAFETY: tcgetattr/tcsetattr operate on a valid tty file descriptor.
         if unsafe { tcgetattr(fd, &mut saved) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -264,7 +387,6 @@ impl RawModeGuard {
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        // SAFETY: restores the previously captured termios state.
         unsafe {
             tcsetattr(self.fd, TCSANOW, &self.saved);
         }

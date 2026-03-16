@@ -39,6 +39,10 @@ pub fn run_shell() -> i32 {
 
                 pending.clear();
 
+                if !full_line.trim().is_empty() {
+                    editor.add_to_history(&full_line);
+                }
+
                 let status = match shell::execute_line(&full_line, &mut state) {
                     Ok(status) => status,
                     Err(err) => {

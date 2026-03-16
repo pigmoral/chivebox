@@ -5,6 +5,12 @@ use std::thread;
 use std::time::Duration;
 
 pub fn main(_args: iter::Skip<env::ArgsOs>) -> i32 {
+    let pid = unsafe { libc::getpid() };
+    if pid != 1 {
+        eprintln!("init: only intended to be run as PID 1");
+        return 1;
+    }
+
     init_signals();
 
     console_init();

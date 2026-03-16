@@ -5,17 +5,15 @@ use std::iter;
 
 pub fn main(args: iter::Skip<env::ArgsOs>) -> i32 {
     let args: Vec<String> = args
-        .skip(1) // Skip program name (e.g., "mount")
+        .skip(1)
         .map(|s| s.to_str().unwrap_or("").to_string())
         .collect();
 
-    // Show help if -h or --help
     if !args.is_empty() && (args[0] == "-h" || args[0] == "--help") {
         print_usage();
         return 0;
     }
 
-    // Show mounts if no arguments
     if args.is_empty() {
         return show_mounts();
     }
@@ -90,6 +88,8 @@ pub fn main(args: iter::Skip<env::ArgsOs>) -> i32 {
         && fs_type != "proc"
         && fs_type != "sysfs"
         && fs_type != "devtmpfs"
+        && fs_type != "cgroup"
+        && fs_type != "cgroup2"
     {
         eprintln!("mount: missing source");
         return 1;
@@ -134,6 +134,32 @@ fn show_mounts() -> i32 {
     1
 }
 
+fn get_block_filesystems() -> Vec<String> {
+    let mut fs_list = Vec::new();
+    let paths = ["/etc/filesystems", "/proc/filesystems"];
+
+    for path in &paths {
+        if let Ok(file) = File::open(path) {
+            let reader = BufReader::new(file);
+            for line in reader.lines().flatten() {
+                let line = line.trim();
+                if line.starts_with("nodev") {
+                    continue;
+                }
+                if line.starts_with('#') || line.starts_with('*') || line.is_empty() {
+                    continue;
+                }
+                let fs = line.split_whitespace().next().unwrap_or("");
+                if !fs.is_empty() && !fs_list.contains(&fs.to_string()) {
+                    fs_list.push(fs.to_string());
+                }
+            }
+        }
+    }
+
+    fs_list
+}
+
 #[cfg(unix)]
 fn mount_fs(
     source: &str,
@@ -144,8 +170,6 @@ fn mount_fs(
     verbose: bool,
     _no_mtab: bool,
 ) -> i32 {
-    use std::ffi::CString;
-
     let mut flags: libc::c_ulong = 0;
 
     if readonly {
@@ -176,30 +200,100 @@ fn mount_fs(
         }
     }
 
-    let source_c = CString::new(if source.is_empty() { "" } else { source }).unwrap();
-    let target_c = CString::new(target).unwrap();
-    let fstype_c = CString::new(if fs_type.is_empty() { "" } else { fs_type }).unwrap();
-    let data_c = CString::new(options).unwrap();
+    if fs_type.is_empty() || fs_type == "auto" {
+        if let Some(info) = crate::volume_id::probe_device(source) {
+            if verbose {
+                eprintln!("mount: detected filesystem type: {}", info.fs_type);
+            }
+            return match do_mount(source, target, &info.fs_type, flags, options) {
+                Ok(()) => {
+                    if verbose {
+                        println!(
+                            "mount: {} mounted on {} (type: {})",
+                            source, target, info.fs_type
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    eprintln!("mount: {}: {}", target, e);
+                    1
+                }
+            };
+        }
+
+        let fs_list = get_block_filesystems();
+        if fs_list.is_empty() {
+            eprintln!("mount: cannot determine filesystem type (no /proc/filesystems?)");
+            return 1;
+        }
+
+        let mut last_error = None;
+        for fstype in &fs_list {
+            if verbose {
+                eprintln!("mount: trying {}...", fstype);
+            }
+            match do_mount(source, target, fstype, flags, options) {
+                Ok(()) => {
+                    if verbose {
+                        println!("mount: {} mounted on {} (type: {})", source, target, fstype);
+                    }
+                    return 0;
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                }
+            }
+        }
+
+        if let Some(e) = last_error {
+            eprintln!("mount: {}: {}", target, e);
+        }
+        return 1;
+    }
+
+    match do_mount(source, target, fs_type, flags, options) {
+        Ok(()) => {
+            if verbose {
+                println!("mount: {} mounted on {}", source, target);
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("mount: {}: {}", target, e);
+            1
+        }
+    }
+}
+
+#[cfg(unix)]
+fn do_mount(
+    source: &str,
+    target: &str,
+    fs_type: &str,
+    flags: libc::c_ulong,
+    options: &str,
+) -> Result<(), std::io::Error> {
+    use std::ffi::CString;
+
+    let source_c = CString::new(source).unwrap_or_default();
+    let target_c = CString::new(target).unwrap_or_default();
+    let fs_type_c = CString::new(fs_type).unwrap_or_default();
+    let data_c = CString::new(options).unwrap_or_default();
 
     let result = unsafe {
         libc::mount(
             source_c.as_ptr() as *const libc::c_char,
             target_c.as_ptr() as *const libc::c_char,
-            fstype_c.as_ptr() as *const libc::c_char,
+            fs_type_c.as_ptr() as *const libc::c_char,
             flags,
             data_c.as_ptr() as *const libc::c_void,
         )
     };
 
-    if result != 0 {
-        let err = std::io::Error::last_os_error();
-        eprintln!("mount: {}: {}", target, err);
-        return 1;
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
-
-    if verbose {
-        println!("mount: {} mounted on {}", source, target);
-    }
-
-    0
 }

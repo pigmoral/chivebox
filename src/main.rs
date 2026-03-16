@@ -2,9 +2,12 @@ use std::env;
 use std::process;
 
 mod applets;
+pub mod blkid;
 pub mod init;
 pub mod mount;
 pub mod sh;
+pub mod umount;
+pub mod volume_id;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

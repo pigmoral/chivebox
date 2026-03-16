@@ -163,6 +163,7 @@ dependencies = [
  "uu_mv",
  "uu_pwd",
  "uu_rm",
+ "uu_sync",
  "uu_touch",
 ]
 
@@ -1149,6 +1150,19 @@ dependencies = [
  "indicatif",
  "libc",
  "thiserror",
+ "uucore",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "uu_sync"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6eeb4b316fd2d7f6730b475923c603fd99d3432da77671e9a93f451139a380"
+dependencies = [
+ "clap",
+ "fluent",
+ "nix",
  "uucore",
  "windows-sys 0.61.2",
 ]

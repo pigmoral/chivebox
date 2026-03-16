@@ -1,7 +1,7 @@
 use std::env;
 use std::iter;
 
-use crate::{init, mount, sh};
+use crate::{blkid, init, mount, sh, umount};
 
 pub struct Applet {
     pub name: &'static str,
@@ -10,6 +10,11 @@ pub struct Applet {
 }
 
 pub const APPLETS: &[Applet] = &[
+    Applet {
+        name: "blkid",
+        help: "Print UUID and TYPE of block devices",
+        main: blkid::main,
+    },
     Applet {
         name: "cat",
         help: "Concatenate and print files",
@@ -71,9 +76,19 @@ pub const APPLETS: &[Applet] = &[
         main: sh::main,
     },
     Applet {
+        name: "sync",
+        help: "Synchronize filesystem caches",
+        main: uu_sync::uumain,
+    },
+    Applet {
         name: "touch",
         help: "Create empty files",
         main: uu_touch::uumain,
+    },
+    Applet {
+        name: "umount",
+        help: "Unmount filesystems",
+        main: umount::main,
     },
 ];
 

@@ -14,6 +14,7 @@ uu_mkdir = "0.7"
 uu_mv = "0.7"
 uu_pwd = "0.7"
 uu_rm = "0.7"
+uu_sync = "0.7"
 uu_touch = "0.7"
 
 [profile.release]

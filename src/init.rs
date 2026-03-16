@@ -71,7 +71,7 @@ fn mount_filesystems() {
     unsafe {
         let _ = mount_internal("proc", "/proc", "proc", 0);
         let _ = mount_internal("dev", "/dev", "devtmpfs", 0);
-        let _ = libc::mkdir("/tmp\0".as_ptr() as *const libc::c_char, 0o755);
+        let _ = mount_internal("sys", "/sys", "sysfs", 0);
         let _ = mount_internal("tmpfs", "/tmp", "tmpfs", 0);
     }
 }

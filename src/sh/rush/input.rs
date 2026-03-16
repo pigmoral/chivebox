@@ -6,7 +6,7 @@ use libc::{
     TCSANOW, TIOCGWINSZ, VMIN, VTIME,
 };
 
-use super::completion::{apply_completion, display_name, CompletionEntry};
+use super::completion::{apply_completion, display_name, token_span, CompletionEntry};
 
 const MAX_HISTORY: usize = 100;
 
@@ -239,11 +239,43 @@ fn handle_completions(
             redraw_line(stdout, prompt, line, *cursor)
         }
         entries => {
-            write_newline(stdout)?;
-            print_completion_grid(stdout, entries)?;
-            redraw_line(stdout, prompt, line, *cursor)
+            let prefix = common_prefix(entries);
+            let span = token_span(line, *cursor);
+            let current = &line[span.start..(*cursor).min(span.end)];
+
+            if prefix.len() > current.len() && prefix.starts_with(current) {
+                let mut new_line = String::with_capacity(line.len() + prefix.len());
+                new_line.push_str(&line[..span.start]);
+                new_line.push_str(&prefix);
+                new_line.push_str(&line[span.end..]);
+                *line = new_line;
+                *cursor = span.start + prefix.len();
+                redraw_line(stdout, prompt, line, *cursor)
+            } else {
+                write_newline(stdout)?;
+                print_completion_grid(stdout, entries)?;
+                redraw_line(stdout, prompt, line, *cursor)
+            }
         }
     }
+}
+
+fn common_prefix(entries: &[CompletionEntry]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let first = &entries[0].value;
+    let mut prefix_len = first.len();
+    for entry in &entries[1..] {
+        prefix_len = prefix_len.min(
+            first
+                .chars()
+                .zip(entry.value.chars())
+                .take_while(|(a, b)| a == b)
+                .count(),
+        );
+    }
+    first.chars().take(prefix_len).collect()
 }
 
 fn redraw_line(stdout: &mut io::Stdout, prompt: &str, line: &str, cursor: usize) -> io::Result<()> {

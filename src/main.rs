@@ -10,6 +10,8 @@ pub mod umount;
 pub mod volume_id;
 
 fn main() {
+    uucore::panic::mute_sigpipe_panic();
+
     let args: Vec<String> = env::args().collect();
 
     let binary_name = args

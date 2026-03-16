@@ -126,6 +126,11 @@ pub const APPLETS: &[Applet] = &[
         main: uu_dirname::uumain,
     },
     Applet {
+        name: "dmesg",
+        help: "Print kernel messages",
+        main: uu_dmesg::uumain,
+    },
+    Applet {
         name: "du",
         help: "Estimate file space usage",
         main: uu_du::uumain,

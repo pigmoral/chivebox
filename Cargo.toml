@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 libc = "0.2"
+uucore = { version = "0.2", features = ["libc", "utmpx", "process", "entries", "signals"] }
 uu_arch = "0.7"
 uu_b2sum = "0.7"
 uu_base32 = "0.7"
@@ -27,6 +28,7 @@ uu_df = "0.7"
 uu_dir = "0.7"
 uu_dircolors = "0.7"
 uu_dirname = "0.7"
+uu_dmesg = { git = "https://github.com/uutils/util-linux", branch = "main" }
 uu_du = "0.7"
 uu_echo = "0.7"
 uu_env = "0.7"

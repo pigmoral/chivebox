@@ -3,6 +3,9 @@ name = "chivebox"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["chiveroot"]
+
 [dependencies]
 libc = "0.2"
 uucore = { version = "0.2", features = ["libc", "utmpx", "process", "entries", "signals", "parser"] }

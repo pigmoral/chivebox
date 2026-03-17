@@ -1,5 +1,11 @@
 # Chivebox Development Notes
 
+## Project Structure
+
+- `chivebox/` - Workspace root
+  - `src/` - chivebox multi-call binary
+  - `chiveroot/` - initramfs builder (workspace member)
+
 ## Project Focus
 
 - `chivebox` is a Rust multi-call binary in the BusyBox style.
@@ -8,6 +14,7 @@
   - Shell (`src/sh/rush/`) for serial-first RISC-V initramfs environments
   - Filesystem utilities (`src/volume_id/`, `src/blkid.rs`, `src/mount.rs`, `src/umount.rs`)
   - Early-init workflow (`src/init.rs`)
+- `chiveroot` is a tool that generates initramfs containing chivebox. It embeds chivebox source code at compile time, so users don't need git or separate source downloads.
 
 ## Current Shell Direction
 
@@ -100,6 +107,31 @@ Synchronizes filesystem caches via `uu_sync`.
 
 ## Initramfs / Build Notes
 
+### chiveroot
+
+`chiveroot` is the recommended way to create initramfs. It embeds chivebox source code and handles cross-compilation automatically.
+
+```bash
+# Install
+cargo install --git https://github.com/pigmoral/chivebox chiveroot
+
+# Build initramfs for RISC-V
+chiveroot --target riscv64 --output initramfs.cpio.gz
+
+# Use pre-built binary (skip compilation)
+chiveroot --target riscv64 --binary /path/to/chivebox
+
+# Use local source instead of embedded source
+chiveroot --target riscv64 --source /path/to/chivebox
+
+# Include kernel modules and firmware
+chiveroot --target riscv64 --modules /lib/modules/6.1.0 --firmware /lib/firmware
+```
+
+Cache locations:
+- Source: `~/.cache/chiveroot/chivebox-source`
+- Binaries: `~/.cache/chiveroot/binaries/<target>/chivebox`
+
 ### Init Program (src/init.rs)
 
 The init program is the first process run by the kernel (PID 1). It handles:
@@ -136,11 +168,18 @@ Applet {
 Note: Do NOT create a separate entry file like `src/<command>.rs` - just reference `uu_<command>::uumain` directly in `applets.rs`.
 
 ### Host Build
-- Host release build: `cargo build --release`
-- RISC-V musl release (use zig linker): `cargo zigbuild --release --target riscv64gc-unknown-linux-musl`
+
+- Build entire workspace: `cargo build --release`
+- Build chivebox only: `cargo build --release -p chivebox`
+- Build chiveroot only: `cargo build --release -p chiveroot`
+- RISC-V musl release: `cargo zigbuild --release --target riscv64gc-unknown-linux-musl`
 - Plain `cargo build --release --target riscv64gc-unknown-linux-musl` may fail on hosts without a working RISC-V musl linker.
 
 ### Creating Initramfs
+
+**Recommended**: Use `chiveroot` to create initramfs automatically (see chiveroot section above).
+
+**Manual method** (for debugging or special cases):
 
 **Important**: Do NOT create device nodes in initramfs using `mknod`. The Linux kernel's devtmpfs will automatically create proper device nodes (`/dev/console`, `/dev/tty`, `/dev/ttyS0`, `/dev/null`, etc.) at boot time. Creating fake device nodes (even with fakeroot) will result in regular files instead of real device nodes, causing I/O failures.
 

@@ -85,15 +85,18 @@ fn run() -> Result<()> {
 
     check_cargo_zigbuild()?;
 
-    let binary_path = if let Some(binary) = &args.binary {
+    let (binary_path, source_dir) = if let Some(binary) = &args.binary {
         println!("Using provided binary: {}", binary);
-        std::path::PathBuf::from(binary)
+        (std::path::PathBuf::from(binary), None)
     } else if let Some(source) = &args.source {
-        build_chivebox(std::path::Path::new(source), &target_triple)?
+        let path = std::path::Path::new(source);
+        let binary = build_chivebox(path, &target_triple)?;
+        (binary, Some(path.to_path_buf()))
     } else {
         // Use embedded source
         let binary_path = embedded::build_chivebox_from_embedded(&target_triple)?;
-        binary_path
+        let source_dir = embedded::get_source_dir();
+        (binary_path, Some(source_dir))
     };
 
     let applets = if args.binary.is_some() {
@@ -101,14 +104,21 @@ fn run() -> Result<()> {
         match embedded::get_applets_from_binary(&binary_path) {
             Ok(applets) => applets,
             Err(_) => {
-                println!("Could not run binary to get applets, parsing from embedded source...");
-                embedded::extract_embedded_source()?;
-                embedded::parse_applets_from_source()?
+                println!("Could not run binary to get applets, parsing from source...");
+                if let Some(ref dir) = source_dir {
+                    embedded::parse_applets_from_dir(dir)?
+                } else {
+                    embedded::parse_applets_from_source()?
+                }
             }
         }
     } else {
-        // Binary was built from embedded source, parse applets from source
-        embedded::parse_applets_from_source()?
+        // Binary was built from source, parse applets from source directory
+        if let Some(ref dir) = source_dir {
+            embedded::parse_applets_from_dir(dir)?
+        } else {
+            embedded::parse_applets_from_source()?
+        }
     };
 
     let output_path = args.output.unwrap_or_else(|| "/tmp".to_string());
@@ -150,15 +160,6 @@ fn check_cargo_zigbuild() -> Result<()> {
 fn build_chivebox(source_dir: &std::path::Path, target: &str) -> Result<std::path::PathBuf> {
     println!("Building chivebox from source...");
 
-    let binary_dir = source_dir.join("target").join(target).join("release");
-
-    if binary_dir.join("chivebox").exists() {
-        println!("Using existing build at {:?}", binary_dir.join("chivebox"));
-        return Ok(binary_dir.join("chivebox"));
-    }
-
-    println!("Building chivebox (this may take a while)...");
-
     let status = Command::new("cargo")
         .args(["zigbuild", "--release", "--target", target])
         .current_dir(source_dir)
@@ -170,5 +171,6 @@ fn build_chivebox(source_dir: &std::path::Path, target: &str) -> Result<std::pat
         ));
     }
 
+    let binary_dir = source_dir.join("target").join(target).join("release");
     Ok(binary_dir.join("chivebox"))
 }

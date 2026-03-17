@@ -49,15 +49,7 @@ pub fn build_chivebox_from_embedded(target: &str) -> Result<PathBuf> {
     let binary_dir = get_binary_dir(target);
     let binary_path = binary_dir.join("chivebox");
 
-    if binary_path.exists() {
-        println!("Using cached binary at {:?}", binary_path);
-        return Ok(binary_path);
-    }
-
-    println!(
-        "Building chivebox for {} (this may take a while)...",
-        target
-    );
+    println!("Building chivebox for {}...", target);
 
     fs::create_dir_all(&binary_dir)?;
 
@@ -90,11 +82,15 @@ pub fn build_chivebox_from_embedded(target: &str) -> Result<PathBuf> {
 
 pub fn parse_applets_from_source() -> Result<Vec<String>> {
     let source_dir = get_source_dir();
+    parse_applets_from_dir(&source_dir)
+}
+
+pub fn parse_applets_from_dir(source_dir: &Path) -> Result<Vec<String>> {
     let applets_path = source_dir.join("src").join("applets.rs");
 
     if !applets_path.exists() {
         return Err(Error::AppletListFailed(
-            "applets.rs not found in extracted source".to_string(),
+            "applets.rs not found in source directory".to_string(),
         ));
     }
 

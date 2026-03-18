@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use crate::{blkid, init, mount, sh, umount};
+use crate::{blkid, init, mount, sh, umount, which};
 
 pub type AppletArgs = std::vec::IntoIter<OsString>;
 
@@ -560,6 +560,11 @@ pub const APPLETS: &[Applet] = &[
         name: "wc",
         help: "Print line/word/byte counts",
         main: uu_wc::uumain,
+    },
+    Applet {
+        name: "which",
+        help: "Locate a command",
+        main: which::main,
     },
     Applet {
         name: "who",

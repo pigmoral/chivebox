@@ -1,9 +1,9 @@
-use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::iter;
 
-pub fn main(args: iter::Skip<env::ArgsOs>) -> i32 {
+use crate::applets::AppletArgs;
+
+pub fn main(args: AppletArgs) -> i32 {
     let args: Vec<String> = args
         .skip(1)
         .map(|s| s.to_str().unwrap_or("").to_string())

@@ -1,10 +1,11 @@
 use std::env;
-use std::iter;
 use std::process;
 use std::thread;
 use std::time::Duration;
 
-pub fn main(_args: iter::Skip<env::ArgsOs>) -> i32 {
+use crate::applets::AppletArgs;
+
+pub fn main(_args: AppletArgs) -> i32 {
     let pid = unsafe { libc::getpid() };
     if pid != 1 {
         eprintln!("init: only intended to be run as PID 1");

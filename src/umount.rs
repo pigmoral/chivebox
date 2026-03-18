@@ -1,11 +1,11 @@
-use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::iter;
+
+use crate::applets::AppletArgs;
 
 const MNT_DETACH: libc::c_ulong = 0x00000002;
 
-pub fn main(_args: iter::Skip<env::ArgsOs>) -> i32 {
+pub fn main(args: AppletArgs) -> i32 {
     let mut force = false;
     let mut lazy = false;
     let mut read_only = false;
@@ -13,7 +13,8 @@ pub fn main(_args: iter::Skip<env::ArgsOs>) -> i32 {
     let mut unmount_all = false;
     let mut fstype: Option<String> = None;
 
-    let args_vec: Vec<String> = env::args().skip(1).collect();
+    // Skip argv[0] (applet name)
+    let args_vec: Vec<String> = args.skip(1).filter_map(|s| s.into_string().ok()).collect();
     let mut i = 0;
     while i < args_vec.len() {
         match args_vec[i].as_str() {

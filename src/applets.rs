@@ -1,12 +1,13 @@
-use std::env;
-use std::iter;
+use std::ffi::OsString;
 
 use crate::{blkid, init, mount, sh, umount};
+
+pub type AppletArgs = std::vec::IntoIter<OsString>;
 
 pub struct Applet {
     pub name: &'static str,
     pub help: &'static str,
-    pub main: fn(args: iter::Skip<env::ArgsOs>) -> i32,
+    pub main: fn(AppletArgs) -> i32,
 }
 
 pub const APPLETS: &[Applet] = &[

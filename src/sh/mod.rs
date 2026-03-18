@@ -1,8 +1,7 @@
 pub mod rush;
 
-use std::env;
-use std::iter;
+use crate::applets::AppletArgs;
 
-pub fn main(_args: iter::Skip<env::ArgsOs>) -> i32 {
+pub fn main(_args: AppletArgs) -> i32 {
     rush::run_shell()
 }

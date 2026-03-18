@@ -1,10 +1,9 @@
-use std::env;
 use std::fs;
-use std::iter;
 
+use crate::applets::AppletArgs;
 use crate::volume_id;
 
-pub fn main(args: iter::Skip<env::ArgsOs>) -> i32 {
+pub fn main(args: AppletArgs) -> i32 {
     let args: Vec<String> = args
         .skip(1)
         .map(|s| s.to_str().unwrap_or("").to_string())

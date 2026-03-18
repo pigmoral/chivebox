@@ -118,11 +118,7 @@ pub fn main(_args: iter::Skip<env::ArgsOs>) -> i32 {
         }
     }
 
-    if failed {
-        1
-    } else {
-        0
-    }
+    if failed { 1 } else { 0 }
 }
 
 fn unmount_single(path: &str, flags: libc::c_ulong, read_only: bool, verbose: bool) -> i32 {

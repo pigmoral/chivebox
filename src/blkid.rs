@@ -30,11 +30,7 @@ pub fn main(args: iter::Skip<env::ArgsOs>) -> i32 {
         }
     }
 
-    if failed {
-        1
-    } else {
-        0
-    }
+    if failed { 1 } else { 0 }
 }
 
 fn print_usage() {
@@ -68,11 +64,7 @@ fn scan_all_devices() -> i32 {
         }
     }
 
-    if found {
-        0
-    } else {
-        1
-    }
+    if found { 0 } else { 1 }
 }
 
 fn scan_partitions(device_path: &std::path::Path) {

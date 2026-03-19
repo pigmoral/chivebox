@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use crate::{blkid, init, mount, sh, umount, which};
+use crate::{blkid, init, ip, mount, ping, sh, umount, which};
 
 pub type AppletArgs = std::vec::IntoIter<OsString>;
 
@@ -217,6 +217,11 @@ pub const APPLETS: &[Applet] = &[
         main: uu_install::uumain,
     },
     Applet {
+        name: "ip",
+        help: "Show/manipulate routing, devices, tunnels",
+        main: ip::main,
+    },
+    Applet {
         name: "join",
         help: "Join lines on common field",
         main: uu_join::uumain,
@@ -330,6 +335,11 @@ pub const APPLETS: &[Applet] = &[
         name: "pathchk",
         help: "Check path validity",
         main: uu_pathchk::uumain,
+    },
+    Applet {
+        name: "ping",
+        help: "Send ICMP ECHO_REQUESTs to host",
+        main: ping::main,
     },
     Applet {
         name: "pinky",

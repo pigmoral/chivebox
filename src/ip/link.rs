@@ -1,3 +1,7 @@
+use super::netlink::{
+    IFF_UP, IfInfoMsg, NLM_F_ACK, NLM_F_REQUEST, NetlinkSocket, RTM_NEWLINK, put_struct,
+    send_netlink,
+};
 use std::fs;
 use std::path::Path;
 
@@ -89,6 +93,7 @@ fn link_show(iface: Option<&str>) -> Result<(), String> {
         let flags_str = fs::read_to_string(path.join("flags"))
             .unwrap_or_else(|_| "0".to_string())
             .trim()
+            .trim_start_matches("0x")
             .to_string();
 
         let flags = u64::from_str_radix(&flags_str, 16).unwrap_or(0);
@@ -203,13 +208,43 @@ fn do_set(args: &[String]) -> i32 {
 }
 
 fn link_set_up(device: &str) -> Result<(), String> {
-    let _ = device;
-    Err("setting link state is not supported yet".to_string())
+    set_link_state(device, true)
 }
 
 fn link_set_down(device: &str) -> Result<(), String> {
-    let _ = device;
-    Err("setting link state is not supported yet".to_string())
+    set_link_state(device, false)
+}
+
+fn set_link_state(device: &str, up: bool) -> Result<(), String> {
+    let index = get_ifindex(device);
+    if index == 0 {
+        return Err(format!("device '{}' not found", device));
+    }
+
+    let mut sock = NetlinkSocket::connect().map_err(|e| format!("netlink socket: {}", e))?;
+
+    let ifinfo = IfInfoMsg {
+        ifi_family: 0,
+        ifi_pad: 0,
+        ifi_type: 0,
+        ifi_index: index as i32,
+        ifi_flags: if up { IFF_UP } else { 0 },
+        ifi_change: IFF_UP,
+    };
+
+    let mut payload = Vec::new();
+    put_struct(&mut payload, &ifinfo);
+
+    send_netlink(
+        sock.fd(),
+        &payload,
+        RTM_NEWLINK,
+        NLM_F_REQUEST | NLM_F_ACK,
+        sock.next_seq(),
+    )
+    .map_err(|e| format!("send netlink: {}", e))?;
+
+    Ok(())
 }
 
 fn link_set_name(device: &str, new_name: &str) -> Result<(), String> {

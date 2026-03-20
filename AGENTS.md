@@ -175,6 +175,20 @@ Note: Do NOT create a separate entry file like `src/<command>.rs` - just referen
 - RISC-V musl release: `cargo zigbuild --release --target riscv64gc-unknown-linux-musl`
 - Plain `cargo build --release --target riscv64gc-unknown-linux-musl` may fail on hosts without a working RISC-V musl linker.
 
+### Post-Change Verification Workflow
+
+After every non-trivial code change, run these commands from `chivebox/` in order:
+
+1. `cargo check`
+2. `cargo test`
+3. `cargo fmt --all`
+4. `cargo build --release`
+5. `./target/release/chiveroot -t riscv64 --source .`
+
+After `chiveroot` finishes, tell the user the path to the created initramfs.
+
+When behavior changes or a bug is fixed, add or update focused tests as needed.
+
 ### Creating Initramfs
 
 **Recommended**: Use `chiveroot` to create initramfs automatically (see chiveroot section above).

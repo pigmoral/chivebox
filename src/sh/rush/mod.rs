@@ -10,16 +10,25 @@ use shell::ShellState;
 
 fn acquire_controlling_terminal() {
     unsafe {
-        if libc::tcgetpgrp(0) >= 0 {
+        // Check if we already have a controlling terminal
+        // tcgetpgrp returns -1 with errno ENOTTY if no controlling terminal
+        if libc::tcgetpgrp(0) > 0 {
             return;
         }
 
-        let _ = libc::setsid();
+        // Create a new session and become session leader
+        let sid = libc::setsid();
+        if sid < 0 {
+            return;
+        }
 
+        // Open terminal and make it controlling
         for tty in ["/dev/console", "/dev/ttyS0"] {
             if let Ok(tty_c) = CString::new(tty) {
                 let fd = libc::open(tty_c.as_ptr(), libc::O_RDWR);
                 if fd >= 0 {
+                    // Make this terminal our controlling terminal
+                    libc::ioctl(fd, libc::TIOCSCTTY, 0);
                     libc::dup2(fd, 0);
                     libc::dup2(fd, 1);
                     libc::dup2(fd, 2);
@@ -36,8 +45,9 @@ fn acquire_controlling_terminal() {
 pub fn run_shell() -> i32 {
     acquire_controlling_terminal();
 
+    // Set up SIGINT handler
+    shell::setup_sigint_handler();
     unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
         libc::signal(libc::SIGQUIT, libc::SIG_DFL);
     }
 
@@ -49,6 +59,12 @@ pub fn run_shell() -> i32 {
     let mut pending = String::new();
 
     loop {
+        // Check for pending SIGINT from previous command
+        if shell::check_sigint() {
+            println!("^C");
+            state.last_status = 130;
+        }
+
         let prompt = if pending.is_empty() {
             shell::prompt(&state)
         } else {
@@ -91,6 +107,7 @@ pub fn run_shell() -> i32 {
             }
             Ok(ReadOutcome::Interrupted) => {
                 pending.clear();
+                println!("^C");
                 state.last_status = 130;
             }
             Ok(ReadOutcome::Eof) => {

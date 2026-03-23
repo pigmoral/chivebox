@@ -71,6 +71,8 @@ fn console_init() {
                 libc::close(fd);
             }
         }
+        // Try to make stdin the controlling terminal
+        libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0);
     }
 }
 

@@ -2,11 +2,11 @@ use std::io::{self, Write};
 use std::os::fd::RawFd;
 
 use libc::{
-    ECHO, ICANON, ISIG, TCSANOW, TIOCGWINSZ, VMIN, VTIME, c_void, ioctl, isatty, read, tcgetattr,
-    tcsetattr, termios, winsize,
+    c_void, ioctl, isatty, read, tcgetattr, tcsetattr, termios, winsize, ECHO, ICANON, ISIG,
+    TCSANOW, TIOCGWINSZ, VMIN, VTIME,
 };
 
-use super::completion::{CompletionEntry, apply_completion, display_name, token_span};
+use super::completion::{apply_completion, display_name, token_span, CompletionEntry};
 use super::shell::interrupt_foreground;
 
 const MAX_HISTORY: usize = 100;
@@ -110,8 +110,6 @@ impl BasicLineEditor {
                 }
                 3 => {
                     interrupt_foreground();
-                    stdout.write_all(b"^C")?;
-                    write_newline(&mut stdout)?;
                     return Ok(ReadOutcome::Interrupted);
                 }
                 4 => {

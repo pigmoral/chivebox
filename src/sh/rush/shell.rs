@@ -6,16 +6,37 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use libc::{
-    ECHO, ICANON, ISIG, SIGINT, TCSANOW, VMIN, VTIME, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WNOHANG,
-    WTERMSIG, c_int, dup, dup2, execvp, fork, getpgrp, isatty, pipe, setpgid, signal, tcgetattr,
-    tcsetattr, tcsetpgrp, termios, waitpid,
+    SIGINT, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WNOHANG, WTERMSIG, c_int, dup, dup2, execvp,
+    fork, getpgrp, isatty, pipe, setpgid, signal, tcsetpgrp, waitpid,
 };
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use crate::applets;
 
 static FOREGROUND_PID: AtomicI32 = AtomicI32::new(-1);
+static SIGINT_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn sigint_handler(_: libc::c_int) {
+    SIGINT_RECEIVED.store(true, Ordering::Relaxed);
+}
+
+pub(crate) fn setup_sigint_handler() {
+    unsafe {
+        libc::signal(libc::SIGINT, sigint_handler as *const () as usize);
+    }
+}
+
+pub(crate) fn check_sigint() -> bool {
+    SIGINT_RECEIVED.swap(false, Ordering::Relaxed)
+}
+
+#[derive(Debug)]
+pub(crate) struct WaitResult {
+    pub(crate) exit_code: i32,
+    pub(crate) killed_by_sigint: bool,
+    pub(crate) sigint_received: bool,
+}
 
 pub(crate) fn interrupt_foreground() {
     let pid = FOREGROUND_PID.load(Ordering::Relaxed);
@@ -740,7 +761,13 @@ fn execute_pipeline(pipeline: &Pipeline, state: &mut ShellState) -> Result<i32, 
     }
 
     for pid in pids {
-        last_status = wait_for_pid(pid)?;
+        let result = wait_for_pid(pid)?;
+        last_status = result.exit_code;
+        if result.killed_by_sigint {
+            println!();
+        } else if result.sigint_received {
+            println!("^C");
+        }
     }
 
     Ok(last_status)
@@ -991,15 +1018,8 @@ fn execute_external_command(
     redirections: &[Redirection],
     state: &ShellState,
 ) -> Result<i32, String> {
-    unsafe {
-        libc::signal(SIGINT, libc::SIG_IGN);
-    }
-
     let pid = unsafe { fork() };
     if pid < 0 {
-        unsafe {
-            libc::signal(SIGINT, libc::SIG_DFL);
-        }
         return Err("fork failed".to_string());
     }
 
@@ -1048,11 +1068,16 @@ fn execute_external_command(
     let result = wait_for_pid(pid);
     FOREGROUND_PID.store(-1, Ordering::Relaxed);
 
-    unsafe {
-        libc::signal(SIGINT, libc::SIG_DFL);
-    }
-
-    result
+    result.map(|r| {
+        if r.killed_by_sigint {
+            // Child was killed by SIGINT, print newline (like hush)
+            println!();
+        } else if r.sigint_received {
+            // Shell received SIGINT, print ^C
+            println!("^C");
+        }
+        r.exit_code
+    })
 }
 
 fn exec_command(argv: &[String]) -> Result<i32, String> {
@@ -1110,84 +1135,34 @@ fn exec_cstrings(cmd: &CString, args: &[CString]) {
     }
 }
 
-fn wait_for_pid(pid: libc::pid_t) -> Result<i32, String> {
+fn wait_for_pid(pid: libc::pid_t) -> Result<WaitResult, String> {
     let mut status: c_int = 0;
 
-    let saved_termios = if unsafe { isatty(0) } == 1 {
-        let mut saved: termios = unsafe { std::mem::zeroed() };
-        if unsafe { tcgetattr(0, &mut saved) } == 0 {
-            let mut raw = saved;
-            raw.c_lflag &= !(ICANON | ECHO | ISIG);
-            raw.c_cc[VMIN] = 1;
-            raw.c_cc[VTIME] = 0;
-            if unsafe { tcsetattr(0, TCSANOW, &raw) } == 0 {
-                Some(saved)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let result = loop {
-        let wait_result = unsafe { waitpid(pid, &mut status, WNOHANG) };
-        if wait_result < 0 {
-            break Err("waitpid failed".to_string());
-        }
-        if wait_result > 0 {
-            break Ok(());
-        }
-
-        let mut read_fds: libc::fd_set = unsafe { std::mem::zeroed() };
-        unsafe {
-            libc::FD_SET(0, &mut read_fds);
-        }
-        let mut timeout = libc::timeval {
-            tv_sec: 0,
-            tv_usec: 100_000,
-        };
-        let sel_result = unsafe {
-            libc::select(
-                1,
-                &mut read_fds,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut timeout,
-            )
-        };
-
-        if sel_result > 0 && unsafe { libc::FD_ISSET(0, &read_fds) } {
-            let mut byte = [0u8; 1];
-            let n = unsafe { libc::read(0, byte.as_mut_ptr() as *mut libc::c_void, 1) };
-            if n > 0 && byte[0] == 3 {
-                let child_pid = FOREGROUND_PID.load(Ordering::Relaxed);
-                if child_pid > 0 {
-                    unsafe {
-                        libc::kill(child_pid, libc::SIGINT);
-                    }
-                }
-            }
-        }
-    };
-
-    if let Some(saved) = saved_termios {
-        unsafe {
-            tcsetattr(0, TCSANOW, &saved);
-        }
+    // Simple blocking wait
+    let wait_result = unsafe { waitpid(pid, &mut status, 0) };
+    if wait_result < 0 {
+        return Err("waitpid failed".to_string());
     }
 
-    result?;
-
-    if WIFEXITED(status) {
-        Ok(WEXITSTATUS(status))
+    let exit_code = if WIFEXITED(status) {
+        WEXITSTATUS(status)
     } else if WIFSIGNALED(status) {
-        Ok(128 + WTERMSIG(status))
+        128 + WTERMSIG(status)
     } else {
-        Ok(1)
-    }
+        1
+    };
+
+    // Check if child was killed by SIGINT
+    let killed_by_sigint = WIFSIGNALED(status) && WTERMSIG(status) == libc::SIGINT as i32;
+
+    // Check if SIGINT was received
+    let sigint_received = SIGINT_RECEIVED.swap(false, Ordering::Relaxed);
+
+    Ok(WaitResult {
+        exit_code,
+        killed_by_sigint,
+        sigint_received,
+    })
 }
 
 fn reset_signal_handlers_for_child() {

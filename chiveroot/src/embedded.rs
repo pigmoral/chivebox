@@ -1,12 +1,20 @@
 use crate::error::{Error, Result};
 use flate2::read::GzDecoder;
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const CHIVEBOX_SOURCE_TAR: &[u8] = include_bytes!(env!("CHIVEBOX_SOURCE_TAR"));
+const VERSION_FILE: &str = ".chiveroot-version";
+
+fn compute_source_hash() -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(CHIVEBOX_SOURCE_TAR);
+    format!("{:x}", hasher.finalize())
+}
 
 pub fn get_cache_dir() -> PathBuf {
     dirs::cache_dir()
@@ -24,10 +32,22 @@ pub fn get_binary_dir(target: &str) -> PathBuf {
 
 pub fn extract_embedded_source() -> Result<PathBuf> {
     let source_dir = get_source_dir();
+    let version_file = source_dir.join(VERSION_FILE);
+    let current_hash = compute_source_hash();
 
+    // Check if cached version matches current embedded source
     if source_dir.exists() {
-        println!("Using cached source at {:?}", source_dir);
-        return Ok(source_dir);
+        if let Ok(stored_hash) = fs::read_to_string(&version_file) {
+            if stored_hash == current_hash {
+                println!("Using cached source at {:?}", source_dir);
+                return Ok(source_dir);
+            }
+        }
+        // Version mismatch, remove old cache
+        println!("Source cache outdated, refreshing...");
+        if let Err(e) = fs::remove_dir_all(&source_dir) {
+            eprintln!("Warning: failed to remove old cache: {}", e);
+        }
     }
 
     println!("Extracting embedded chivebox source...");
@@ -39,6 +59,9 @@ pub fn extract_embedded_source() -> Result<PathBuf> {
     let mut archive = tar::Archive::new(decoder);
 
     archive.unpack(&source_dir)?;
+
+    // Write version file
+    fs::write(&version_file, &current_hash)?;
 
     println!("Extracted source to {:?}", source_dir);
     Ok(source_dir)

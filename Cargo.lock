@@ -400,6 +400,7 @@ dependencies = [
  "dirs",
  "flate2",
  "regex",
+ "sha2",
  "tar",
  "tempfile",
  "walkdir",

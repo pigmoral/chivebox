@@ -7,6 +7,7 @@ use libc::{
 };
 
 use super::completion::{CompletionEntry, apply_completion, display_name, token_span};
+use super::shell::interrupt_foreground;
 
 const MAX_HISTORY: usize = 100;
 
@@ -108,6 +109,7 @@ impl BasicLineEditor {
                     return Ok(ReadOutcome::Line(line));
                 }
                 3 => {
+                    interrupt_foreground();
                     stdout.write_all(b"^C")?;
                     write_newline(&mut stdout)?;
                     return Ok(ReadOutcome::Interrupted);

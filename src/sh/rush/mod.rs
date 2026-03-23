@@ -3,11 +3,44 @@ mod input;
 mod shell;
 
 use std::env;
+use std::ffi::CString;
 
 use input::{BasicLineEditor, ReadOutcome};
 use shell::ShellState;
 
+fn acquire_controlling_terminal() {
+    unsafe {
+        if libc::tcgetpgrp(0) >= 0 {
+            return;
+        }
+
+        let _ = libc::setsid();
+
+        for tty in ["/dev/console", "/dev/ttyS0"] {
+            if let Ok(tty_c) = CString::new(tty) {
+                let fd = libc::open(tty_c.as_ptr(), libc::O_RDWR);
+                if fd >= 0 {
+                    libc::dup2(fd, 0);
+                    libc::dup2(fd, 1);
+                    libc::dup2(fd, 2);
+                    if fd > 2 {
+                        libc::close(fd);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
 pub fn run_shell() -> i32 {
+    acquire_controlling_terminal();
+
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+    }
+
     shell::ensure_default_path();
 
     let cwd = env::current_dir().unwrap_or_else(|_| std::path::Path::new("/").to_path_buf());

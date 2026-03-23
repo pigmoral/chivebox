@@ -6,11 +6,25 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use libc::{
-    SIGINT, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WTERMSIG, c_int, dup, dup2, execvp, fork, pipe,
-    signal, waitpid,
+    ECHO, ICANON, ISIG, SIGINT, TCSANOW, VMIN, VTIME, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WNOHANG,
+    WTERMSIG, c_int, dup, dup2, execvp, fork, getpgrp, isatty, pipe, setpgid, signal, tcgetattr,
+    tcsetattr, tcsetpgrp, termios, waitpid,
 };
 
+use std::sync::atomic::{AtomicI32, Ordering};
+
 use crate::applets;
+
+static FOREGROUND_PID: AtomicI32 = AtomicI32::new(-1);
+
+pub(crate) fn interrupt_foreground() {
+    let pid = FOREGROUND_PID.load(Ordering::Relaxed);
+    if pid > 0 {
+        unsafe {
+            libc::kill(pid, libc::SIGINT);
+        }
+    }
+}
 
 pub(crate) const BUILTIN_NAMES: &[&str] = &["cd", "exit", "export", "pwd", "unset"];
 pub(crate) const DEFAULT_PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
@@ -20,14 +34,35 @@ pub(crate) struct ShellState {
     pub(crate) cwd: PathBuf,
     pub(crate) last_status: i32,
     pub(crate) exit_code: Option<i32>,
+    pub(crate) interactive_fd: Option<RawFd>,
 }
 
 impl ShellState {
     pub(crate) fn new(cwd: PathBuf) -> Self {
+        let interactive_fd = unsafe {
+            if isatty(0) == 1 {
+                Some(0)
+            } else if isatty(1) == 1 {
+                Some(1)
+            } else if isatty(2) == 1 {
+                Some(2)
+            } else {
+                None
+            }
+        };
+
+        if let Some(fd) = interactive_fd {
+            unsafe {
+                setpgid(0, 0);
+                tcsetpgrp(fd, getpgrp());
+            }
+        }
+
         Self {
             cwd,
             last_status: 0,
             exit_code: None,
+            interactive_fd,
         }
     }
 }
@@ -956,8 +991,15 @@ fn execute_external_command(
     redirections: &[Redirection],
     state: &ShellState,
 ) -> Result<i32, String> {
+    unsafe {
+        libc::signal(SIGINT, libc::SIG_IGN);
+    }
+
     let pid = unsafe { fork() };
     if pid < 0 {
+        unsafe {
+            libc::signal(SIGINT, libc::SIG_DFL);
+        }
         return Err("fork failed".to_string());
     }
 
@@ -1002,7 +1044,15 @@ fn execute_external_command(
         unsafe { libc::_exit(status) };
     }
 
-    wait_for_pid(pid)
+    FOREGROUND_PID.store(pid, Ordering::Relaxed);
+    let result = wait_for_pid(pid);
+    FOREGROUND_PID.store(-1, Ordering::Relaxed);
+
+    unsafe {
+        libc::signal(SIGINT, libc::SIG_DFL);
+    }
+
+    result
 }
 
 fn exec_command(argv: &[String]) -> Result<i32, String> {
@@ -1062,10 +1112,74 @@ fn exec_cstrings(cmd: &CString, args: &[CString]) {
 
 fn wait_for_pid(pid: libc::pid_t) -> Result<i32, String> {
     let mut status: c_int = 0;
-    let wait_result = unsafe { waitpid(pid, &mut status, 0) };
-    if wait_result < 0 {
-        return Err("waitpid failed".to_string());
+
+    let saved_termios = if unsafe { isatty(0) } == 1 {
+        let mut saved: termios = unsafe { std::mem::zeroed() };
+        if unsafe { tcgetattr(0, &mut saved) } == 0 {
+            let mut raw = saved;
+            raw.c_lflag &= !(ICANON | ECHO | ISIG);
+            raw.c_cc[VMIN] = 1;
+            raw.c_cc[VTIME] = 0;
+            if unsafe { tcsetattr(0, TCSANOW, &raw) } == 0 {
+                Some(saved)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let result = loop {
+        let wait_result = unsafe { waitpid(pid, &mut status, WNOHANG) };
+        if wait_result < 0 {
+            break Err("waitpid failed".to_string());
+        }
+        if wait_result > 0 {
+            break Ok(());
+        }
+
+        let mut read_fds: libc::fd_set = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::FD_SET(0, &mut read_fds);
+        }
+        let mut timeout = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 100_000,
+        };
+        let sel_result = unsafe {
+            libc::select(
+                1,
+                &mut read_fds,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut timeout,
+            )
+        };
+
+        if sel_result > 0 && unsafe { libc::FD_ISSET(0, &read_fds) } {
+            let mut byte = [0u8; 1];
+            let n = unsafe { libc::read(0, byte.as_mut_ptr() as *mut libc::c_void, 1) };
+            if n > 0 && byte[0] == 3 {
+                let child_pid = FOREGROUND_PID.load(Ordering::Relaxed);
+                if child_pid > 0 {
+                    unsafe {
+                        libc::kill(child_pid, libc::SIGINT);
+                    }
+                }
+            }
+        }
+    };
+
+    if let Some(saved) = saved_termios {
+        unsafe {
+            tcsetattr(0, TCSANOW, &saved);
+        }
     }
+
+    result?;
 
     if WIFEXITED(status) {
         Ok(WEXITSTATUS(status))

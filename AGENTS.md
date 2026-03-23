@@ -100,7 +100,8 @@ Synchronizes filesystem caches via `uu_sync`.
 ## Signal Handling Notes
 
 - Child processes restore default `SIGINT` handling before running commands.
-- Interactive execution is moving toward hush-style tty ownership: the shell needs to hand the controlling tty to the foreground process group and reclaim it afterwards.
+- **Ctrl+C interrupt handling**: The shell uses non-blocking `waitpid(WNOHANG)` with `poll()` to detect Ctrl+C while waiting for child processes. When Ctrl+C (byte 0x03) is detected on stdin, the shell explicitly sends `SIGINT` to the foreground child process.
+- This approach works in QEMU serial console where Ctrl+C doesn't automatically generate SIGINT signals.
 - In `rdinit=/bin/sh` and PID 1 scenarios, verify whether the shell has a controlling tty before assuming job control is available. Reference `busybox ash` and `cttyhack` behavior for acquiring ctty.
 - Signal exits are mapped to shell-style statuses such as `130` for `SIGINT`.
 - Always re-verify Ctrl-C behavior on both host PTY and QEMU serial after touching input, termios, or process execution code.
@@ -238,7 +239,6 @@ Note: The kernel's devtmpfs will automatically create `/dev/console`, `/dev/tty`
 ## Known Gaps / Next Work
 
 - Foreground job control and tty handoff are critical areas and should be kept aligned with `busybox hush` behavior.
-- `Ctrl-C` handling for all serial/QEMU combinations should be re-verified after each input-layer change.
 - Missing shell features compared with `busybox hush` still include things like:
   - `2>` / `2>>` / `2>&1`
   - `.` / `source`

@@ -4,6 +4,7 @@ use std::process;
 
 mod applets;
 pub mod blkid;
+pub mod free;
 pub mod init;
 pub mod ip;
 pub mod mount;

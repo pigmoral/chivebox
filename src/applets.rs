@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use crate::{blkid, init, ip, mount, ping, sh, umount, which};
+use crate::{blkid, free, init, ip, mount, ping, sh, umount, which};
 
 pub type AppletArgs = std::vec::IntoIter<OsString>;
 
@@ -175,6 +175,11 @@ pub const APPLETS: &[Applet] = &[
         name: "fold",
         help: "Wrap lines",
         main: uu_fold::uumain,
+    },
+    Applet {
+        name: "free",
+        help: "Display free and used memory",
+        main: free::main,
     },
     Applet {
         name: "groups",

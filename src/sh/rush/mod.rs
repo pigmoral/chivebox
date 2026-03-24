@@ -1,6 +1,6 @@
 mod completion;
 mod input;
-mod shell;
+pub mod shell;
 
 use std::env;
 use std::ffi::CString;

@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::completion::{complete_path, display_name, token_span};
 use super::shell::{
-    DEFAULT_PATH, ShellState, ensure_default_path, execute_line, expand_word_fields_for_test,
-    remove_env_var, set_env_var, set_env_var_os, tokenize_for_test,
+    ensure_default_path, execute_line, expand_word_fields_for_test, remove_env_var, set_env_var,
+    set_env_var_os, tokenize_for_test, ShellState, DEFAULT_PATH,
 };
 
 struct TempDir {

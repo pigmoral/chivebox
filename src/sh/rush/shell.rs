@@ -6,8 +6,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use libc::{
-    SIGINT, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WNOHANG, WTERMSIG, c_int, dup, dup2, execvp,
-    fork, getpgrp, isatty, pipe, setpgid, signal, tcsetpgrp, waitpid,
+    SIGINT, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WTERMSIG, c_int, dup, dup2, execvp,
+    fork, pipe, signal, waitpid,
 };
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -55,35 +55,14 @@ pub(crate) struct ShellState {
     pub(crate) cwd: PathBuf,
     pub(crate) last_status: i32,
     pub(crate) exit_code: Option<i32>,
-    pub(crate) interactive_fd: Option<RawFd>,
 }
 
 impl ShellState {
     pub(crate) fn new(cwd: PathBuf) -> Self {
-        let interactive_fd = unsafe {
-            if isatty(0) == 1 {
-                Some(0)
-            } else if isatty(1) == 1 {
-                Some(1)
-            } else if isatty(2) == 1 {
-                Some(2)
-            } else {
-                None
-            }
-        };
-
-        if let Some(fd) = interactive_fd {
-            unsafe {
-                setpgid(0, 0);
-                tcsetpgrp(fd, getpgrp());
-            }
-        }
-
         Self {
             cwd,
             last_status: 0,
             exit_code: None,
-            interactive_fd,
         }
     }
 }

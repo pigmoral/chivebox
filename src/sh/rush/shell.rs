@@ -6,8 +6,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 
 use libc::{
-    SIGINT, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WTERMSIG, c_int, dup, dup2, execvp,
-    fork, pipe, signal, waitpid,
+    SIGINT, WEXITSTATUS, WIFEXITED, WIFSIGNALED, WTERMSIG, c_int, dup, dup2, execvp, fork, pipe,
+    signal, waitpid,
 };
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};

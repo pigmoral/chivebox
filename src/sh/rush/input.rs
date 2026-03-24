@@ -2,11 +2,11 @@ use std::io::{self, Write};
 use std::os::fd::RawFd;
 
 use libc::{
-    c_void, ioctl, isatty, read, tcgetattr, tcsetattr, termios, winsize, ECHO, ICANON, ISIG,
-    TCSANOW, TIOCGWINSZ, VMIN, VTIME,
+    ECHO, ICANON, ISIG, TCSANOW, TIOCGWINSZ, VMIN, VTIME, c_void, ioctl, isatty, read, tcgetattr,
+    tcsetattr, termios, winsize,
 };
 
-use super::completion::{apply_completion, display_name, token_span, CompletionEntry};
+use super::completion::{CompletionEntry, apply_completion, display_name, token_span};
 use super::shell::interrupt_foreground;
 
 const MAX_HISTORY: usize = 100;

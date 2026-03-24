@@ -182,3 +182,31 @@ fn token_span_replaces_entire_path_token() {
     assert_eq!(span.start, 3);
     assert_eq!(span.end, 11);
 }
+
+#[cfg(unix)]
+#[test]
+fn completes_symlink_to_directory_as_directory() {
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new();
+    let dir_path = temp.path().join("real_dir");
+    let file_path = temp.path().join("real_file.txt");
+    let link_dir_path = temp.path().join("link_to_dir");
+    let link_file_path = temp.path().join("link_to_file");
+
+    fs::create_dir_all(&dir_path).unwrap();
+    fs::write(&file_path, b"").unwrap();
+    symlink(&dir_path, &link_dir_path).unwrap();
+    symlink(&file_path, &link_file_path).unwrap();
+
+    let matches = complete_path("link_to_", temp.path(), false);
+
+    assert_eq!(matches.len(), 2);
+    let dir = matches.iter().find(|e| e.value == "link_to_dir/").unwrap();
+    assert!(dir.is_dir);
+    assert!(dir.value.ends_with('/'));
+
+    let file = matches.iter().find(|e| e.value == "link_to_file").unwrap();
+    assert!(!file.is_dir);
+    assert!(!file.value.ends_with('/'));
+}

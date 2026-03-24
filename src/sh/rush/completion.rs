@@ -202,14 +202,6 @@ pub(crate) fn complete_path(token: &str, cwd: &Path, only_dirs: bool) -> Vec<Com
 
     if let Ok(entries) = fs::read_dir(&request.dir) {
         for entry in entries.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-
-            if only_dirs && !file_type.is_dir() {
-                continue;
-            }
-
             let Some(name) = entry.file_name().to_str().map(str::to_string) else {
                 continue;
             };
@@ -218,7 +210,22 @@ pub(crate) fn complete_path(token: &str, cwd: &Path, only_dirs: bool) -> Vec<Com
                 continue;
             }
 
-            let is_dir = file_type.is_dir();
+            let is_symlink = fs::symlink_metadata(entry.path())
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+
+            let is_dir = if is_symlink {
+                fs::metadata(entry.path())
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+            } else {
+                entry.metadata().map(|m| m.is_dir()).unwrap_or(false)
+            };
+
+            if only_dirs && !is_dir {
+                continue;
+            }
+
             let mut value = format!("{}{}", request.value_prefix, name);
             if is_dir {
                 value.push('/');

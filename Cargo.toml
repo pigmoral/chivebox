@@ -118,6 +118,10 @@ uu_who = "0.7"
 uu_whoami = "0.7"
 uu_yes = "0.7"
 
+[build-dependencies]
+anyhow = "1"
+vergen = { version = "8", features = ["build", "git", "git2"] }
+
 [profile.release]
 lto = true
 panic = "abort"

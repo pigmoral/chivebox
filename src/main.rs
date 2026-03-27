@@ -2,6 +2,18 @@ use std::env;
 use std::ffi::OsString;
 use std::process;
 
+pub const BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
+pub const GIT_SHA: &str = env!("VERGEN_GIT_SHA");
+
+pub fn print_version() {
+    println!(
+        "chivebox v{}-g{} ({})",
+        env!("CARGO_PKG_VERSION"),
+        GIT_SHA,
+        BUILD_TIMESTAMP
+    );
+}
+
 mod applets;
 pub mod blkid;
 pub mod free;
@@ -34,7 +46,7 @@ fn main() {
             process::exit(0);
         }
         "--version" | "-V" => {
-            println!("chivebox 0.1.0");
+            print_version();
             process::exit(0);
         }
         "--list" | "-l" => {
@@ -106,7 +118,7 @@ fn prepare_applet_args(raw_args: &[OsString]) -> Option<(String, Vec<OsString>)>
 }
 
 fn usage() {
-    println!("chivebox 0.1.0");
+    print_version();
     println!("Usage: chivebox [FUNCTION] [ARGS...]");
 
     println!();

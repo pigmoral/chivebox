@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::applets::AppletArgs;
+use crate::print_version;
 
 pub fn main(_args: AppletArgs) -> i32 {
     let pid = unsafe { libc::getpid() };
@@ -16,7 +17,7 @@ pub fn main(_args: AppletArgs) -> i32 {
 
     console_init();
 
-    println!("ChiveBox 0.1.0");
+    print_version();
 
     mount_filesystems();
 

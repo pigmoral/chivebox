@@ -24,9 +24,12 @@ fn print_help() {
     println!("Usage: ip rule COMMAND");
     println!();
     println!("Commands:");
-    println!("  ip rule list   show routing policy rules");
-    println!("  ip rule add    add rule (not fully supported)");
-    println!("  ip rule del    delete rule (not fully supported)");
+    println!("  ip rule list                  - show routing policy rules");
+    println!("  ip rule add                   - add rule (not fully supported)");
+    println!("  ip rule del                   - delete rule (not fully supported)");
+    println!();
+    println!("Help:");
+    println!("  ip rule help                  - display this help message");
 }
 
 fn do_list() -> i32 {

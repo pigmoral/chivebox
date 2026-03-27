@@ -36,11 +36,12 @@ fn print_help() {
     println!("Usage: ip addr COMMAND");
     println!();
     println!("Commands:");
-    println!("  ip addr show [DEVICE]              show addresses");
-    println!("  ip addr add ADDR dev DEVICE        add IPv4 address");
-    println!("  ip addr del ADDR dev DEVICE        delete IPv4 address");
-    println!("Aliases:");
-    println!("  ip a show, ip a add, ip a del");
+    println!("  ip addr show [DEVICE]      - show addresses");
+    println!("  ip addr add ADDR dev DEV   - add IPv4 address");
+    println!("  ip addr del ADDR dev DEV   - delete IPv4 address");
+    println!();
+    println!("Help:");
+    println!("  ip addr help                 - display this help message");
 }
 
 fn do_show(iface: Option<&str>, _one_line: bool) -> i32 {

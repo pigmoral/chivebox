@@ -19,14 +19,10 @@ pub fn main(args: AppletArgs) -> i32 {
     }
 
     match args[0].as_str() {
-        "a" => addr::main(&args[1..]),
-        "l" => link::main(&args[1..]),
-        "r" => route::main(&args[1..]),
-        "n" => neigh::main(&args[1..]),
-        "link" => link::main(&args[1..]),
-        "addr" => addr::main(&args[1..]),
-        "route" => route::main(&args[1..]),
-        "neigh" => neigh::main(&args[1..]),
+        "a" | "addr" => addr::main(&args[1..]),
+        "l" | "link" => link::main(&args[1..]),
+        "r" | "route" => route::main(&args[1..]),
+        "n" | "neigh" => neigh::main(&args[1..]),
         "rule" => rule::main(&args[1..]),
         "-h" | "--help" | "help" => {
             print_help();
@@ -44,16 +40,16 @@ fn print_help() {
     println!("Usage: ip [OPTIONS] OBJECT ...");
     println!();
     println!("Objects:");
-    println!("  ip link     - network device configuration");
-    println!("  ip addr     - protocol address management");
-    println!("  ip route    - routing table management");
-    println!("  ip neigh    - neighbor table management");
-    println!("  ip rule     - routing policy database");
+    println!("  link          - network device configuration");
+    println!("  addr          - protocol address management");
+    println!("  route         - routing table management");
+    println!("  neigh         - neighbor table management");
+    println!("  rule            - routing policy database");
     println!();
     println!("Options:");
-    println!("  -f[amily]   specify protocol family (inet, inet6, link)");
-    println!("  -o[neline]   output in single line format");
+    println!("  -family       specify protocol family (inet, inet6, link)");
+    println!("  -oneline      output in single line format");
     println!();
-    println!("Aliases:");
-    println!("  ip a, ip l, ip r, ip n");
+    println!("Help:");
+    println!("  ip help         - display this help message");
 }

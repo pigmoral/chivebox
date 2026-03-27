@@ -33,12 +33,15 @@ fn print_help() {
     println!("Usage: ip link COMMAND");
     println!();
     println!("Commands:");
-    println!("  ip link show [DEVICE]     - show device attributes");
-    println!("  ip link set DEVICE up    - bring device up");
-    println!("  ip link set DEVICE down  - bring device down");
+    println!("  ip link show [DEVICE]        - show device attributes");
+    println!("  ip link set DEVICE up        - bring device up");
+    println!("  ip link set DEVICE down      - bring device down");
     println!("  ip link set DEVICE name NAME - rename device");
-    println!("  ip link add NAME type TYPE - add virtual interface");
-    println!("  ip link del DEVICE      - delete device");
+    println!("  ip link add NAME type TYPE   - add virtual interface");
+    println!("  ip link del DEVICE           - delete device");
+    println!();
+    println!("Help:");
+    println!("  ip link help                 - display this help message");
 }
 
 fn do_show(iface: Option<&str>) -> i32 {

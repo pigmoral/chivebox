@@ -24,8 +24,11 @@ fn print_help() {
     println!("Usage: ip neigh COMMAND");
     println!();
     println!("Commands:");
-    println!("  ip neigh show            show neighbor entries");
-    println!("  ip neigh flush [DEV]     flush neighbor entries");
+    println!("  ip neigh show                 - show neighbor entries");
+    println!("  ip neigh flush [DEV]          - flush neighbor entries");
+    println!();
+    println!("Help:");
+    println!("  ip neigh help                 - display this help message");
 }
 
 fn do_show() -> i32 {

@@ -30,12 +30,13 @@ fn print_help() {
     println!("Usage: ip route COMMAND");
     println!();
     println!("Commands:");
-    println!("  ip route show                     show routing table");
-    println!("  ip route get DEST                 get route for destination");
-    println!("  ip route add DEST via GW dev DEV  add route");
-    println!("  ip route del DEST                 delete route");
-    println!("Aliases:");
-    println!("  ip r show, ip r add, ip r del");
+    println!("  ip route show                 - show routing table");
+    println!("  ip route get DEST             - get route for destination");
+    println!("  ip route add DEST via GW dev DEV - add route");
+    println!("  ip route del DEST             - delete route");
+    println!();
+    println!("Help:");
+    println!("  ip route help                 - display this help message");
 }
 
 fn do_show() -> i32 {
